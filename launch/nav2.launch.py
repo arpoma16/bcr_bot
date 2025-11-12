@@ -71,17 +71,6 @@ def generate_launch_description():
         }]
     )
 
-    # Nodo para activar la navegación después de que todo esté listo
-    activate_nav_node = Node(
-        package='bcr_bot',
-        executable='activate_navigation.py',
-        name='navigation_activator',
-        output='screen',
-        parameters=[{
-            'delay': 7.0   # Espera 7 segundos antes de activar navegación
-        }]
-    )
-
     ld = LaunchDescription()
 
     ld.add_action(nav2_launch_cmd)
@@ -89,7 +78,6 @@ def generate_launch_description():
     # ld.add_action(static_transform_publisher_node)  # Comentado: AMCL ya maneja el transform map->odom
     ld.add_action(remapper_node)
     ld.add_action(initial_pose_node)
-    ld.add_action(activate_nav_node)
 
     return ld
 
