@@ -11,7 +11,7 @@ def generate_launch_description():
     pkg_bcr = get_package_share_directory('bcr_bot')
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='True')
-    autostart = LaunchConfiguration('autostart', default='True')
+    autostart = LaunchConfiguration('autostart', default='true')
 
     nav2_launch_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -22,7 +22,6 @@ def generate_launch_description():
             'autostart': autostart,
             'map': os.path.join(pkg_bcr, 'config', 'bcr_map.yaml'),
             'params_file': os.path.join(pkg_bcr, 'config', 'nav2_params.yaml'),
-            'package_path': pkg_bcr, 
         }.items()
     )
 
@@ -38,30 +37,17 @@ def generate_launch_description():
             )
         ]
     )
-    
-    amcl_node = Node(
-        package='nav2_amcl',
-        executable='amcl',
-        name='amcl',
-        output='screen',
-        parameters=[os.path.join(pkg_bcr, 'config', 'amcl_params.yaml')],
-    )
 
-    map_server_node = Node(
-        package='nav2_map_server',
-        executable='map_server',
-        name='map_server',
-        output='screen',
-        parameters=[{'yaml_filename': os.path.join(pkg_bcr, 'config', 'bcr_map.yaml')}],
-    )
+    # NOTA: No lanzar amcl ni map_server aquí porque bringup_launch.py ya los lanza
+    # Si los lanzamos duplicados, causa conflictos de lifecycle
 
-    static_transform_publisher_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='map_to_odom',
-        output='screen',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
-    )
+    # static_transform_publisher_node = Node(
+    #     package='tf2_ros',
+    #     executable='static_transform_publisher',
+    #     name='map_to_odom',
+    #     output='screen',
+    #     arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
+    # )
 
     remapper_node = Node(
         package='bcr_bot',
@@ -70,14 +56,40 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Nodo para publicar la pose inicial automáticamente
+    initial_pose_node = Node(
+        package='bcr_bot',
+        executable='set_initial_pose.py',
+        name='initial_pose_publisher',
+        output='screen',
+        parameters=[{
+            'x': 0.0,      # Cambia estos valores según la posición inicial de tu robot
+            'y': 0.0,      # en el mapa
+            'z': 0.0,
+            'yaw': 0.0,    # Orientación inicial en radianes
+            'delay': 5.0   # Espera 5 segundos para dar tiempo a que todo se inicialice
+        }]
+    )
+
+    # Nodo para activar la navegación después de que todo esté listo
+    activate_nav_node = Node(
+        package='bcr_bot',
+        executable='activate_navigation.py',
+        name='navigation_activator',
+        output='screen',
+        parameters=[{
+            'delay': 7.0   # Espera 7 segundos antes de activar navegación
+        }]
+    )
+
     ld = LaunchDescription()
 
     ld.add_action(nav2_launch_cmd)
     ld.add_action(rviz_launch_cmd)
-    ld.add_action(amcl_node)
-    ld.add_action(map_server_node)
-    ld.add_action(static_transform_publisher_node)
+    # ld.add_action(static_transform_publisher_node)  # Comentado: AMCL ya maneja el transform map->odom
     ld.add_action(remapper_node)
+    ld.add_action(initial_pose_node)
+    ld.add_action(activate_nav_node)
 
     return ld
 

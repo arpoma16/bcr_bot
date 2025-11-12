@@ -11,7 +11,10 @@ install( DIRECTORY config/
          DESTINATION share/${PROJECT_NAME}/config)
          
          
-install(PROGRAMS scripts/remapper.py
+install(PROGRAMS
+        scripts/remapper.py
+        scripts/set_initial_pose.py
+        scripts/activate_navigation.py
         DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
