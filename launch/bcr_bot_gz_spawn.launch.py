@@ -48,7 +48,8 @@ def generate_launch_description():
                     ' two_d_lidar_enabled:=', two_d_lidar_enabled,
                     ' odometry_source:=', odometry_source,
                     ' sim_gz:=', "true"
-                    ])}],
+                    ])},
+                    {'use_sim_time': True}],
         remappings=[
             ('/joint_states', 'bcr_bot/joint_states'),
         ]
@@ -65,7 +66,8 @@ def generate_launch_description():
             "-x", position_x,
             "-y", position_y,
             "-Y", orientation_yaw
-        ]
+        ],
+        parameters=[{'use_sim_time': True}]
     )
 
     gz_ros2_bridge = Node(
@@ -73,7 +75,6 @@ def generate_launch_description():
         executable="parameter_bridge",
         arguments=[
             "/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist",
-            "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
             "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
             "/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
             "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
@@ -87,6 +88,7 @@ def generate_launch_description():
             "/imu@sensor_msgs/msg/Imu[gz.msgs.IMU",
             "/world/default/model/bcr_bot/joint_state@sensor_msgs/msg/JointState[gz.msgs.Model"
         ],
+        parameters=[{'use_sim_time': True}],
         remappings=[
             ('/world/default/model/bcr_bot/joint_state', 'bcr_bot/joint_states'),
             ('/odom', 'bcr_bot/odom'),
@@ -113,7 +115,8 @@ def generate_launch_description():
                     "--pitch", "0.0",
                     "--roll", "0.0",
                     "--frame-id", "kinect_camera",
-                    "--child-frame-id", "bcr_bot/base_footprint/kinect_camera"]
+                    "--child-frame-id", "bcr_bot/base_footprint/kinect_camera"],
+        parameters=[{'use_sim_time': True}]
     )
 
     return LaunchDescription([

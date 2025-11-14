@@ -134,7 +134,7 @@ Visualization Manager:
       Visual Enabled: true
     - Class: rviz_default_plugins/TF
       Enabled: true
-      Frame Timeout: 15
+      Frame Timeout: 30
       Frames:
         All Enabled: false
         back_left_wheel:
@@ -231,7 +231,7 @@ Visualization Manager:
       Topic:
         Depth: 5
         Durability Policy: Volatile
-        Filter size: 10
+        Filter size: 50
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /bcr_bot/scan

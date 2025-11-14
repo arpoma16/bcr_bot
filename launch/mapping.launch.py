@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -44,26 +44,30 @@ def generate_launch_description():
         name="rviz2",
         arguments=[
             '-d', os.path.join(pkg_bcr, 'rviz', 'map.rviz')
-        ]
+        ],
+        parameters=[{'use_sim_time': use_sim_time}]
     )
 
-    # Static transform publisher
-    static_transform_publisher_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='map_to_odom',
-        output='screen',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
+    # Add a small delay to SLAM toolbox to ensure TF tree is ready
+    delayed_slam = TimerAction(
+        period=3.0,
+        actions=[slam_toolbox_launch_cmd]
+    )
+
+    # Add a delay to RViz to ensure SLAM toolbox is ready
+    delayed_rviz = TimerAction(
+        period=5.0,
+        actions=[rviz_launch_cmd]
     )
 
     # Create launch description and add actions
+    # Note: SLAM Toolbox in mapping mode publishes map->odom transform automatically
     ld = LaunchDescription()
 
     ld.add_action(declare_use_sim_time)
     ld.add_action(declare_autostart)
-    ld.add_action(slam_toolbox_launch_cmd)
-    ld.add_action(rviz_launch_cmd)
-    ld.add_action(static_transform_publisher_node)
+    ld.add_action(delayed_slam)
+    ld.add_action(delayed_rviz)
 
     return ld
 
