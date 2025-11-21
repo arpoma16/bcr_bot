@@ -20,7 +20,7 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'map': os.path.join(pkg_bcr, 'config', 'bcr_map.yaml'),
+            'map': os.path.join(pkg_bcr, 'config', 'factory_map.yaml'),
             'params_file': os.path.join(pkg_bcr, 'config', 'nav2_params.yaml'),
         }.items()
     )
@@ -63,8 +63,8 @@ def generate_launch_description():
         name='initial_pose_publisher',
         output='screen',
         parameters=[{
-            'x': 0.0,      # Cambia estos valores según la posición inicial de tu robot
-            'y': 0.0,      # en el mapa
+            'x': 15.0,      # Cambia estos valores según la posición inicial de tu robot
+            'y': -24.0,      # en el mapa
             'z': 0.0,
             'yaw': -1.57,    # Orientación inicial en radianes
             'delay': 5.0   # Espera 5 segundos para dar tiempo a que todo se inicialice
