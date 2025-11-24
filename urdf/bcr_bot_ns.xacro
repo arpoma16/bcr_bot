@@ -277,7 +277,7 @@
 
     </link>
 
-    <joint name="roof joint" type="fixed">
+    <joint name="roof_joint" type="fixed">
         <parent link="chassis_link"/>
         <child link="roof_link"/>
         <origin xyz="0 0 0.16" rpy="0 0 0" />
