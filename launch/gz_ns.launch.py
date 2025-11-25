@@ -30,7 +30,17 @@ def generate_launch_description():
             # Pass any arguments if your spawn.launch.py requires
         }.items()
     )
-
+    # spawn_bcr_bot_node_2 = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(join(bcr_bot_path, "launch", "bcr_bot_gz_spawn_ns.launch.py")),
+    #     launch_arguments={
+    #         "robot_namespace": "bcr_bot_2",
+    #         "position_x": "5.0",
+    #         "position_y": "2.0",
+    #         "orientation_yaw": "0.0",
+    #         # Pass any arguments if your spawn.launch.py requires
+    #     }.items()
+    # )
+    
     return LaunchDescription([
 
         AppendEnvironmentVariable(

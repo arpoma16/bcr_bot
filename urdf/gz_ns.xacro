@@ -3,6 +3,8 @@
 
     <!-- Argumento para el namespace del robot -->
     <xacro:arg name="robot_namespace" default="bcr_bot"/>
+    <xacro:property name="robot_namespace" value="$(arg robot_namespace)"/>
+    <xacro:property name="prefix" value="${robot_namespace + '/' if robot_namespace else ''}"/>
 
     <!-- ........................... SENSOR PLUGIN ................................... -->
 
@@ -20,20 +22,20 @@
         <!-- ........................... DIFFERENTIAL DRIVE PLUGIN ................................... -->
 
         <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
-            <left_joint>middle_left_wheel_joint</left_joint>
-            <right_joint>middle_right_wheel_joint</right_joint>
+            <left_joint>${prefix}middle_left_wheel_joint</left_joint>
+            <right_joint>${prefix}middle_right_wheel_joint</right_joint>
             <wheel_separation>${traction_track_width+traction_wheel_width-0.01}</wheel_separation>
             <wheel_radius>${traction_wheel_radius+0.01}</wheel_radius>
             <odom_publish_frequency>30</odom_publish_frequency>
-            
+
             <!-- Topics con namespace del robot -->
             <topic>$(arg robot_namespace)/cmd_vel</topic>
-            
+
             <xacro:if value="${odometry_source == 'encoders'}">
                 <odom_topic>$(arg robot_namespace)/odometry</odom_topic>
                 <tf_topic>$(arg robot_namespace)/tf</tf_topic>
             </xacro:if>
-            
+
             <!-- Frames con namespace -->
             <frame_id>$(arg robot_namespace)/odom</frame_id>
             <child_frame_id>$(arg robot_namespace)/base_footprint</child_frame_id>
@@ -49,11 +51,11 @@
             <!-- Frames con namespace -->
             <odom_frame>$(arg robot_namespace)/odom</odom_frame>
             <robot_base_frame>$(arg robot_namespace)/base_footprint</robot_base_frame>
-            
+
             <!-- Topics con namespace -->
             <odom_topic>$(arg robot_namespace)/odometry</odom_topic>
             <tf_topic>$(arg robot_namespace)/tf</tf_topic>
-            
+
             <dimensions>2</dimensions>
             <odom_publish_frequency>10</odom_publish_frequency>
         </plugin>
@@ -63,15 +65,12 @@
     <!-- ........................... 2D LIDAR config ................................... -->
 
     <xacro:if value="$(arg two_d_lidar_enabled)">
-        <gazebo reference="two_d_lidar">
+        <gazebo reference="${prefix}two_d_lidar">
             <sensor name='gpu_lidar' type='gpu_lidar'>
-                <!-- Topic con namespace -->
+                <pose>0 0 0 0 0 0</pose>
+                <!-- <pose relative_to="${prefix}two_d_lidar">0 0 0 0 0 0</pose> -->
                 <topic>$(arg robot_namespace)/scan</topic>
                 <update_rate>${two_d_lidar_update_rate}</update_rate>
-                
-                <!-- Frame con namespace -->
-                <gz_frame_id>$(arg robot_namespace)/two_d_lidar</gz_frame_id>
-                
                 <lidar>
                     <scan>
                         <horizontal>
@@ -101,19 +100,19 @@
     <!-- ........................... CAMERA config ................................... -->
 
     <xacro:if value="$(arg camera_enabled)">
-        <gazebo reference="kinect_camera">
+        <gazebo reference="${prefix}kinect_camera">
             <sensor type="depth_camera" name="kinect_camera">
                 <update_rate>30.0</update_rate>
-                
+                <always_on>1</always_on>
+                <visualize>true</visualize>
+
                 <!-- Topic con namespace -->
                 <topic>$(arg robot_namespace)/kinect_camera</topic>
-                
-                <!-- Frame con namespace -->
-                <gz_frame_id>$(arg robot_namespace)/kinect_camera</gz_frame_id>
-                
-                <camera>
-                    <!-- Camera info topic con namespace -->
-                    <camera_info_topic>$(arg robot_namespace)/kinect_camera/camera_info</camera_info_topic>
+
+                <!-- Pose del sensor relativo al link -->
+                <pose>0 0 0 0 0 0</pose>
+
+                <camera name="kinect_camera">
                     <horizontal_fov>${radians(camera_horizontal_fov)}</horizontal_fov>
                     <image>
                         <width>640</width>
@@ -124,6 +123,29 @@
                         <near>0.05</near>
                         <far>8.0</far>
                     </clip>
+                    <depth_camera>
+                        <clip>
+                            <near>0.05</near>
+                            <far>8.0</far>
+                        </clip>
+                    </depth_camera>
+                    <distortion>
+                        <k1>0.0</k1>
+                        <k2>0.0</k2>
+                        <k3>0.0</k3>
+                        <p1>0.0</p1>
+                        <p2>0.0</p2>
+                        <center>0.5 0.5</center>
+                    </distortion>
+                    <lens>
+                        <intrinsics>
+                            <fx>554.25</fx>
+                            <fy>554.25</fy>
+                            <cx>320.5</cx>
+                            <cy>240.5</cy>
+                            <s>0</s>
+                        </intrinsics>
+                    </lens>
                 </camera>
             </sensor>
         </gazebo>
@@ -131,16 +153,13 @@
 
     <!-- ........................... IMU config ................................... -->
 
-    <gazebo reference="imu_frame">
+    <gazebo reference="${prefix}imu_frame">
         <sensor name="imu_sensor" type="imu">
             <always_on>1</always_on>
             <update_rate>1</update_rate>
-            
-            <!-- Frame con namespace -->
-            <gz_frame_id>$(arg robot_namespace)/imu_frame</gz_frame_id>
-            
+
             <visualize>true</visualize>
-            
+
             <!-- Topic con namespace -->
             <topic>$(arg robot_namespace)/imu</topic>
         </sensor>
@@ -148,54 +167,51 @@
 
     <!-- ........................... Stereo camera ................................... -->
     <xacro:if value="$(arg stereo_camera_enabled)">
-        <gazebo reference="stereo_camera">
+        <gazebo reference="${prefix}stereo_camera">
             <sensor type="camera" name="right">
                 <update_rate>10.0</update_rate>
                 <always_on>true</always_on>
-                
-                <!-- Frame con namespace -->
-                <gz_frame_id>$(arg robot_namespace)/stereo_camera_optical</gz_frame_id>
-                
+
                 <pose>0 -0.12 0 0 0 0</pose>
-                
+
                 <!-- Topics con namespace -->
                 <topic>$(arg robot_namespace)/stereo_camera/right/image_raw</topic>
-                <camera_info_topic>$(arg robot_namespace)/stereo_camera/right/camera_info</camera_info_topic>
-                
-                <horizontal_fov>1.3962634</horizontal_fov>
-                <image>
-                    <width>1024</width>
-                    <height>1024</height>
-                    <format>R8G8B8</format>
-                </image>
-                <clip>
-                    <near>0.3</near>
-                    <far>20</far>
-                </clip>
+
+                <camera name="right_camera">
+                    <horizontal_fov>1.3962634</horizontal_fov>
+                    <image>
+                        <width>1024</width>
+                        <height>1024</height>
+                        <format>R8G8B8</format>
+                    </image>
+                    <clip>
+                        <near>0.3</near>
+                        <far>20</far>
+                    </clip>
+                </camera>
             </sensor>
 
             <sensor type="camera" name="left">
                 <!-- Topics con namespace -->
                 <topic>$(arg robot_namespace)/stereo_camera/left/image_raw</topic>
-                <camera_info_topic>$(arg robot_namespace)/stereo_camera/left/camera_info</camera_info_topic>
-                
+
                 <update_rate>10.0</update_rate>
                 <always_on>true</always_on>
-                
-                <!-- Frame con namespace -->
-                <gz_frame_id>$(arg robot_namespace)/stereo_camera_optical</gz_frame_id>
-                
+
                 <pose>0 0 0 0 0 0</pose>
-                <horizontal_fov>1.3962634</horizontal_fov>
-                <image>
-                    <width>1024</width>
-                    <height>1024</height>
-                    <format>R8G8B8</format>
-                </image>
-                <clip>
-                    <near>0.3</near>
-                    <far>20</far>
-                </clip>
+
+                <camera name="left_camera">
+                    <horizontal_fov>1.3962634</horizontal_fov>
+                    <image>
+                        <width>1024</width>
+                        <height>1024</height>
+                        <format>R8G8B8</format>
+                    </image>
+                    <clip>
+                        <near>0.3</near>
+                        <far>20</far>
+                    </clip>
+                </camera>
             </sensor>
         </gazebo>
     </xacro:if>

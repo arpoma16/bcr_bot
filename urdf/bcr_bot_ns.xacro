@@ -49,36 +49,27 @@
     <xacro:arg name="odometry_source" default="world" />
 
     <xacro:property name="odometry_source" value="$(arg odometry_source)"/>
+    <xacro:property name="robot_namespace" value="$(arg robot_namespace)"/>
+    <xacro:property name="prefix" value="${robot_namespace + '/' if robot_namespace else ''}"/>
 
     <!-- ............................... LOAD MACROS ................................. -->
 
     <xacro:include filename="$(find bcr_bot)/urdf/materials.xacro"/>
     <xacro:include filename="$(find bcr_bot)/urdf/macros.xacro"/>
-
-    <xacro:if value="$(arg sim_gazebo)">
-        <xacro:include filename="$(find bcr_bot)/urdf/gazebo.xacro"/>
-    </xacro:if>
-
-    <xacro:if value="$(arg sim_ign)">
-        <xacro:include filename="$(find bcr_bot)/urdf/ign.xacro"/>
-    </xacro:if>
-
-    <xacro:if value="$(arg sim_gz)">
-        <xacro:include filename="$(find bcr_bot)/urdf/gz_ns.xacro"/>
-    </xacro:if>
+    <xacro:include filename="$(find bcr_bot)/urdf/gz_ns.xacro"/>
 
     <!-- ................................ BASE LINK .................................. -->
-    <link name="base_footprint"/>
+    <link name="${prefix}base_footprint"/>
 
-    <link name="base_link"/>
+    <link name="${prefix}base_link"/>
 
-    <joint name="base_joint" type="fixed">
-        <parent link="base_footprint"/>
-        <child link="base_link"/>
+    <joint name="${prefix}base_joint" type="fixed">
+        <parent link="${prefix}base_footprint"/>
+        <child link="${prefix}base_link"/>
         <origin xyz="0.0 0 ${chassis_height/2 + traction_wheel_radius}" rpy="0 0 0.0" />
     </joint>
 
-    <link name="chassis_link">
+    <link name="${prefix}chassis_link">
 
         <collision>
             <origin xyz="0 0 -0.05" rpy="0 0 0" />
@@ -101,28 +92,28 @@
 
     </link>
 
-    <joint name="chassis_joint" type="fixed">
-        <parent link="base_link"/>
-        <child link="chassis_link"/>
+    <joint name="${prefix}chassis_joint" type="fixed">
+        <parent link="${prefix}base_link"/>
+        <child link="${prefix}chassis_link"/>
         <origin xyz="0.0 0 0" rpy="0 0 0.0" />
     </joint>
 
     <!-- ................................ WHEELS ..................................... -->
 
-    <xacro:trolley_wheel cardinality="front" dexterity="left" origin_x="${chassis_length/2}" origin_y="${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}"/>
-    <xacro:trolley_wheel cardinality="front" dexterity="right" origin_x="${chassis_length/2}" origin_y="-${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}"/>
+    <xacro:trolley_wheel cardinality="front" dexterity="left" origin_x="${chassis_length/2}" origin_y="${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}" prefix="${prefix}"/>
+    <xacro:trolley_wheel cardinality="front" dexterity="right" origin_x="${chassis_length/2}" origin_y="-${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}" prefix="${prefix}"/>
 
-    <xacro:trolley_wheel cardinality="back" dexterity="left" origin_x="-${chassis_length/2}" origin_y="${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}"/>
-    <xacro:trolley_wheel cardinality="back" dexterity="right" origin_x="-${chassis_length/2}" origin_y="-${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}"/>
+    <xacro:trolley_wheel cardinality="back" dexterity="left" origin_x="-${chassis_length/2}" origin_y="${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}" prefix="${prefix}"/>
+    <xacro:trolley_wheel cardinality="back" dexterity="right" origin_x="-${chassis_length/2}" origin_y="-${trolley_track_width/2}" origin_z="-${trolley_wheel_radius+chassis_height/2}" prefix="${prefix}"/>
 
-    <xacro:traction_wheel cardinality="middle" dexterity="left" origin_x="0" origin_y="${traction_track_width/2}" origin_z="-${chassis_height/2+2*trolley_wheel_radius+eps-traction_wheel_radius}"/>
-    <xacro:traction_wheel cardinality="middle" dexterity="right" origin_x="0" origin_y="-${traction_track_width/2}" origin_z="-${chassis_height/2+2*trolley_wheel_radius+eps-traction_wheel_radius}"/>
+    <xacro:traction_wheel cardinality="middle" dexterity="left" origin_x="0" origin_y="${traction_track_width/2}" origin_z="-${chassis_height/2+2*trolley_wheel_radius+eps-traction_wheel_radius}" prefix="${prefix}"/>
+    <xacro:traction_wheel cardinality="middle" dexterity="right" origin_x="0" origin_y="-${traction_track_width/2}" origin_z="-${chassis_height/2+2*trolley_wheel_radius+eps-traction_wheel_radius}" prefix="${prefix}"/>
 
     <!-- ............................. 2D LIDAR ........................................ -->
 
     <xacro:if value="$(arg two_d_lidar_enabled)">
 
-        <link name="two_d_lidar">
+        <link name="${prefix}two_d_lidar">
             <collision>
                 <origin xyz="0 0 0" rpy="0 0 0" />
                 <geometry>
@@ -145,13 +136,13 @@
             </inertial>
         </link>
 
-        <joint name="two_d_lidar_joint" type="fixed">
-            <parent link="base_link"/>
-            <child link="two_d_lidar"/>
+        <joint name="${prefix}two_d_lidar_joint" type="fixed">
+            <parent link="${prefix}base_link"/>
+            <child link="${prefix}two_d_lidar"/>
             <origin xyz="0.0 0 0.08" rpy="0 0 0" />
         </joint>
 
-        <gazebo reference="two_d_lidar">
+        <gazebo reference="${prefix}two_d_lidar">
             <material>Gazebo/White</material>
         </gazebo>
 
@@ -159,11 +150,11 @@
 
     <!-- ............................. IMU ........................................ -->
 
-    <link name="imu_frame"/>
+    <link name="${prefix}imu_frame"/>
 
-    <joint name="imu_joint" type="fixed">
-        <parent link="base_link"/>
-        <child link="imu_frame"/>
+    <joint name="${prefix}imu_joint" type="fixed">
+        <parent link="${prefix}base_link"/>
+        <child link="${prefix}imu_frame"/>
         <origin xyz="0.0 0.0 0.08" rpy="0.0 0.0 0.0"/>
     </joint>
 
@@ -173,7 +164,7 @@
 
         <!-- KINECT CAMERA -->
 
-        <link name="kinect_camera">
+        <link name="${prefix}kinect_camera">
 
             <collision>
                 <origin xyz="0 0 0" rpy="0 0 0" />
@@ -197,18 +188,18 @@
 
         </link>
 
-        <joint name="kinect_camera_joint" type="fixed">
+        <joint name="${prefix}kinect_camera_joint" type="fixed">
             <origin rpy="0 0 0" xyz="${chassis_length/2} 0 ${chassis_height/7}"/>
-            <parent link="base_link"/>
-            <child link="kinect_camera"/>
+            <parent link="${prefix}base_link"/>
+            <child link="${prefix}kinect_camera"/>
         </joint>
 
-        <link name="kinect_camera_optical"/>
+        <link name="${prefix}kinect_camera_optical"/>
 
-        <joint name="kinect_camera_optical_joint" type="fixed">
+        <joint name="${prefix}kinect_camera_optical_joint" type="fixed">
             <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
-            <parent link="kinect_camera"/>
-            <child link="kinect_camera_optical"/>
+            <parent link="${prefix}kinect_camera"/>
+            <child link="${prefix}kinect_camera_optical"/>
         </joint>
 
     </xacro:if>
@@ -219,7 +210,7 @@
 
         <!-- STEREO CAMERA -->
 
-        <link name="stereo_camera">
+        <link name="${prefix}stereo_camera">
 
             <collision>
                 <origin xyz="0 0 0" rpy="0 0 0" />
@@ -243,25 +234,25 @@
 
         </link>
 
-        <joint name="stereo_camera_joint" type="fixed">
+        <joint name="${prefix}stereo_camera_joint" type="fixed">
             <origin rpy="0 0 0" xyz="${chassis_length/2} 0 ${chassis_height/7}"/>
-            <parent link="base_link"/>
-            <child link="stereo_camera"/>
+            <parent link="${prefix}base_link"/>
+            <child link="${prefix}stereo_camera"/>
         </joint>
 
-        <link name="stereo_camera_optical"/>
+        <link name="${prefix}stereo_camera_optical"/>
 
-        <joint name="stereo_camera_optical_joint" type="fixed">
+        <joint name="${prefix}stereo_camera_optical_joint" type="fixed">
             <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
-            <parent link="stereo_camera"/>
-            <child link="stereo_camera_optical"/>
+            <parent link="${prefix}stereo_camera"/>
+            <child link="${prefix}stereo_camera_optical"/>
         </joint>
 
     </xacro:if>
 
     <!-- ............................. ROOF ........................................ -->
 
-    <link name="roof_link">
+    <link name="${prefix}roof_link">
 
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0" />
@@ -277,9 +268,9 @@
 
     </link>
 
-    <joint name="roof_joint" type="fixed">
-        <parent link="chassis_link"/>
-        <child link="roof_link"/>
+    <joint name="${prefix}roof_joint" type="fixed">
+        <parent link="${prefix}chassis_link"/>
+        <child link="${prefix}roof_link"/>
         <origin xyz="0 0 0.16" rpy="0 0 0" />
     </joint>
 
@@ -287,7 +278,7 @@
 
     <xacro:if value="$(arg conveyor_enabled)">
 
-        <link name="conveyor_belt">
+        <link name="${prefix}conveyor_belt">
 
             <collision>
                 <origin xyz="0 0 0" rpy="0 0 0" />
@@ -310,9 +301,9 @@
 
         </link>
 
-        <joint name="conveyor_joint" type="fixed">
-            <parent link="base_link"/>
-            <child link="conveyor_belt"/>
+        <joint name="${prefix}conveyor_joint" type="fixed">
+            <parent link="${prefix}base_link"/>
+            <child link="${prefix}conveyor_belt"/>
             <origin xyz="0 0 0.25" rpy="0 0 0" />
         </joint>
 

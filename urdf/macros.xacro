@@ -17,8 +17,8 @@
 
     <!-- ............................... TROLLEY WHEEL DEFINITION .............................. -->
 
-    <xacro:macro name="trolley_wheel" params="cardinality dexterity origin_x origin_y origin_z">
-        <link name="${cardinality}_${dexterity}_wheel">
+    <xacro:macro name="trolley_wheel" params="cardinality dexterity origin_x origin_y origin_z prefix:=''">
+        <link name="${prefix}${cardinality}_${dexterity}_wheel">
             <collision>
                 <origin xyz="0 0 0" rpy="0 ${pi/2} ${pi/2}" />
                 <geometry>
@@ -35,20 +35,20 @@
             <mu>0.0</mu>
         </link>
 
-        <joint name="${cardinality}_${dexterity}_wheel_joint" type="fixed">
-            <parent link="base_link"/>
-            <child link="${cardinality}_${dexterity}_wheel"/>
+        <joint name="${prefix}${cardinality}_${dexterity}_wheel_joint" type="fixed">
+            <parent link="${prefix}base_link"/>
+            <child link="${prefix}${cardinality}_${dexterity}_wheel"/>
             <origin xyz="${origin_x} ${origin_y} ${origin_z}" rpy="0 0 0" />
             <axis xyz="0 1 0" rpy="0 0 0" />
         </joint>
 
-        <gazebo reference="${cardinality}_${dexterity}_wheel">
+        <gazebo reference="${prefix}${cardinality}_${dexterity}_wheel">
             <material>Gazebo/Black</material>
         </gazebo>
     </xacro:macro>
 
-    <xacro:macro name="traction_wheel" params="cardinality dexterity origin_x origin_y origin_z">
-        <link name="${cardinality}_${dexterity}_wheel">
+    <xacro:macro name="traction_wheel" params="cardinality dexterity origin_x origin_y origin_z prefix:=''">
+        <link name="${prefix}${cardinality}_${dexterity}_wheel">
             <collision>
                 <origin xyz="0 0 0" rpy="0 ${pi/2} ${pi/2}" />
                 <geometry>
@@ -66,14 +66,14 @@
             <mu>5.0</mu>
         </link>
 
-        <joint name="${cardinality}_${dexterity}_wheel_joint" type="continuous">
-            <parent link="base_link"/>
-            <child link="${cardinality}_${dexterity}_wheel"/>
+        <joint name="${prefix}${cardinality}_${dexterity}_wheel_joint" type="continuous">
+            <parent link="${prefix}base_link"/>
+            <child link="${prefix}${cardinality}_${dexterity}_wheel"/>
             <origin xyz="${origin_x} ${origin_y} ${origin_z}" rpy="0 0 0" />
             <axis xyz="0 1 0" rpy="0 0 0" />
         </joint>
 
-        <gazebo reference="${cardinality}_${dexterity}_wheel">
+        <gazebo reference="${prefix}${cardinality}_${dexterity}_wheel">
             <material>Gazebo/Black</material>
         </gazebo>
     </xacro:macro>
