@@ -4,25 +4,19 @@ from os.path import join
 from xacro import parse, process_doc
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, Command
-from launch.substitutions import PythonExpression
-from launch_ros.actions import PushRosNamespace
 
 
 from launch_ros.actions import Node
 
 from ament_index_python.packages import get_package_share_directory
 
-def get_xacro_to_doc(xacro_file_path, mappings):
-    doc = parse(open(xacro_file_path))
-    process_doc(doc, mappings=mappings)
-    return doc
 
 def generate_launch_description():
    
     bcr_bot_path = get_package_share_directory("bcr_bot")
-    
+
     position_x = LaunchConfiguration("position_x")
     position_y = LaunchConfiguration("position_y")
     orientation_yaw = LaunchConfiguration("orientation_yaw")
@@ -31,32 +25,25 @@ def generate_launch_description():
     two_d_lidar_enabled = LaunchConfiguration("two_d_lidar_enabled", default=True)
     odometry_source = LaunchConfiguration("odometry_source")
     robot_namespace = LaunchConfiguration("robot_namespace", default='bcr_bot')
+    urdf = join(bcr_bot_path, 'urdf', 'bcr_bot_ns.xacro')
 
-
-    # robot_description_content = get_xacro_to_doc(
-    #     join(bcr_bot_path, "urdf", "bcr_bot.xacro"),
-    #     {"sim_gz": "true",
-    #      "two_d_lidar_enabled": "true",
-    #      "conveyor_enabled": "false",
-    #      "camera_enabled": "true"
-    #     }
-    # ).toxml()
-
-    robot_state_publisher = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        name="robot_state_publisher",
-        namespace=robot_namespace,
-        parameters=[
-                    {'robot_description': Command( \
-                    ['xacro ', join(bcr_bot_path, 'urdf/bcr_bot_ns.xacro'),
+    robot_description_config = Command( \
+                    ['xacro ', urdf,
                     ' camera_enabled:=', camera_enabled,
                     ' stereo_camera_enabled:=', stereo_camera_enabled,
                     ' two_d_lidar_enabled:=', two_d_lidar_enabled,
                     ' odometry_source:=', odometry_source,
                     ' sim_gz:=', "true",
                     ' robot_namespace:=', robot_namespace,
-                    ])},
+                    ])
+    
+    robot_state_publisher = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        name="robot_state_publisher",
+        namespace=robot_namespace,
+        parameters=[
+                    {'robot_description': robot_description_config },
                     {'use_sim_time': True}],
         remappings=[
             ('/tf', 'tf'),
@@ -111,35 +98,38 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='lidar_frame_fix',
+        namespace=robot_namespace,
         arguments=[
             '--x', '0', '--y', '0', '--z', '0',
             '--roll', '0', '--pitch', '0', '--yaw', '0',
             '--frame-id', [robot_namespace, '/two_d_lidar'],
-            '--child-frame-id', [robot_namespace, '/bcr_bot/base_footprint/gpu_lidar']
+            '--child-frame-id', [robot_namespace,'/',robot_namespace, '/base_footprint/gpu_lidar']
         ],
-        parameters=[{'use_sim_time': True}]
+        parameters=[{'use_sim_time': True}],
+        remappings=[
+            ('/tf', 'tf'),
+            ('/tf_static', 'tf_static')
+        ]
     )
 
-    # Este transform_publisher parece ser innecesario ya que el URDF ya define la relacion
-    # entre base_link y kinect_camera. Si es necesario, debe corregirse el frame_id
-    # transform_publisher = Node(
-    #     package="tf2_ros",
-    #     executable="static_transform_publisher",
-    #     arguments = ["--x", "0.0",
-    #                 "--y", "0.0",
-    #                 "--z", "0.0",
-    #                 "--yaw", "0.0",
-    #                 "--pitch", "0.0",
-    #                 "--roll", "0.0",
-    #                 "--frame-id", [robot_namespace, "/kinect_camera"],
-    #                 "--child-frame-id", "kinect_camera_link"
-    #     ],
-    #     parameters=[{'use_sim_time': True}]
-    # )
-    # transform_publisher_with_ns = GroupAction([
-    # PushRosNamespace(robot_namespace),
-    # transform_publisher
-    # ])
+    # Static transform to fix the incorrect Kinect camera frame from Gazebo
+    kinect_frame_fix = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='kinect_frame_fix',
+        namespace=robot_namespace,
+        arguments=[
+            '--x', '0', '--y', '0', '--z', '0',
+            '--roll', '0', '--pitch', '0', '--yaw', '0',
+            '--frame-id', [robot_namespace, '/kinect_camera'],
+            '--child-frame-id', [robot_namespace,'/',robot_namespace, '/base_footprint/kinect_camera']
+        ],
+        parameters=[{'use_sim_time': True}],
+        remappings=[
+            ('/tf', 'tf'),
+            ('/tf_static', 'tf_static')
+        ]
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument("camera_enabled", default_value = camera_enabled),
@@ -152,5 +142,6 @@ def generate_launch_description():
         robot_state_publisher,
         gz_spawn_entity,
         gz_ros2_bridge,
-        lidar_frame_fix
+        lidar_frame_fix,
+        kinect_frame_fix
     ])
