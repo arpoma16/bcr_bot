@@ -1,4 +1,5 @@
 import os
+from os.path import join
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
@@ -21,39 +22,41 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'autostart': autostart,
             'map': os.path.join(pkg_bcr, 'config', 'factory_map.yaml'),
-            'params_file': os.path.join(pkg_bcr, 'config', 'nav2_params.yaml'),
+            'params_file': os.path.join(pkg_bcr, 'config', 'nav2_params2.yaml'),
         }.items()
     )
-
+    
+    # Usando el archivo local de bcr_bot
     rviz_launch_cmd = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2",
         arguments=[
-            '-d' + os.path.join(
-                get_package_share_directory('nav2_bringup'),
-                'rviz',
-                'nav2_default_view.rviz'
-            )
+            '-d',
+            os.path.join(pkg_bcr, 'rviz', 'nav2_default_view.rviz')
         ]
     )
-
-    # NOTA: No lanzar amcl ni map_server aquí porque bringup_launch.py ya los lanza
-    # Si los lanzamos duplicados, causa conflictos de lifecycle
-
-    # static_transform_publisher_node = Node(
-    #     package='tf2_ros',
-    #     executable='static_transform_publisher',
-    #     name='map_to_odom',
-    #     output='screen',
-    #     arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
+    
+    # rviz_launch_cmd = Node(
+    #     package="rviz2",
+    #     executable="rviz2",
+    #     name="rviz2",
+    #     arguments=[
+    #         '-d',
+    #         os.path.join(get_package_share_directory('nav2_bringup'), 'rviz', 'nav2_default_view.rviz'),
+    #         '--ros-args', '-r', '/tf:=/bcr_bot/tf', '-r', '/tf_static:=/bcr_bot/tf_static'
+    #     ]
     # )
 
-    remapper_node = Node(
-        package='bcr_bot',
-        executable='remapper.py',
-        name='remapper',
-        output='screen',
+    # IMPORTANTE: El bridge de Gazebo publica el TF de odometría (bcr_bot/odom -> bcr_bot/base_footprint)
+    # en el topic /bcr_bot/tf, pero Nav2 escucha TF en el topic global /tf.
+    # Este relay copia los mensajes de /bcr_bot/tf a /tf para que Nav2 pueda ver la odometría.
+    tf_relay = Node(
+        package='topic_tools',
+        executable='relay',
+        name='bcr_bot_tf_relay',
+        arguments=['/bcr_bot/tf', '/tf'],
+        output='screen'
     )
 
     # Nodo para publicar la pose inicial automáticamente
@@ -75,8 +78,7 @@ def generate_launch_description():
 
     ld.add_action(nav2_launch_cmd)
     ld.add_action(rviz_launch_cmd)
-    # ld.add_action(static_transform_publisher_node)  # Comentado: AMCL ya maneja el transform map->odom
-    ld.add_action(remapper_node)
+    ld.add_action(tf_relay)
     ld.add_action(initial_pose_node)
 
     return ld

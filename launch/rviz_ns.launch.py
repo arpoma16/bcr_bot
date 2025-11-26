@@ -38,10 +38,6 @@ def generate_launch_description():
             ])},
             {'use_sim_time': use_sim_time}
         ],
-        remappings=[
-            ('/tf', 'tf'),
-            ('/tf_static', 'tf_static')
-        ],
         condition=UnlessCondition(isaac_sim)
     )
 
@@ -51,8 +47,7 @@ def generate_launch_description():
         name='rviz2',
         output='screen',
         arguments=[
-            '-d', join(bcr_bot_path, 'rviz', 'entire_setup_ns.rviz'),
-            '--ros-args', '-r', '/tf:=/bcr_bot/tf', '-r', '/tf_static:=/bcr_bot/tf_static'
+            '-d', join(bcr_bot_path, 'rviz', 'entire_setup_ns.rviz')
         ],
         parameters=[{'use_sim_time': use_sim_time}]
     )

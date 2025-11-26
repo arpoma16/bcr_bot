@@ -44,11 +44,9 @@ def generate_launch_description():
         namespace=robot_namespace,
         parameters=[
                     {'robot_description': robot_description_config },
-                    {'use_sim_time': True}],
-        remappings=[
-            ('/tf', 'tf'),
-            ('/tf_static', 'tf_static')
-        ]
+                    # {"frame_prefix": robot_namespace + "/"},
+                    {'use_sim_time': True},
+                    ]
     )
 
     gz_spawn_entity = Node(
@@ -93,43 +91,6 @@ def generate_launch_description():
         ]
     )
 
-    # Static transform to fix the incorrect LIDAR frame from Gazebo
-    lidar_frame_fix = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='lidar_frame_fix',
-        namespace=robot_namespace,
-        arguments=[
-            '--x', '0', '--y', '0', '--z', '0',
-            '--roll', '0', '--pitch', '0', '--yaw', '0',
-            '--frame-id', [robot_namespace, '/two_d_lidar'],
-            '--child-frame-id', [robot_namespace,'/',robot_namespace, '/base_footprint/gpu_lidar']
-        ],
-        parameters=[{'use_sim_time': True}],
-        remappings=[
-            ('/tf', 'tf'),
-            ('/tf_static', 'tf_static')
-        ]
-    )
-
-    # Static transform to fix the incorrect Kinect camera frame from Gazebo
-    kinect_frame_fix = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='kinect_frame_fix',
-        namespace=robot_namespace,
-        arguments=[
-            '--x', '0', '--y', '0', '--z', '0',
-            '--roll', '0', '--pitch', '0', '--yaw', '0',
-            '--frame-id', [robot_namespace, '/kinect_camera'],
-            '--child-frame-id', [robot_namespace,'/',robot_namespace, '/base_footprint/kinect_camera']
-        ],
-        parameters=[{'use_sim_time': True}],
-        remappings=[
-            ('/tf', 'tf'),
-            ('/tf_static', 'tf_static')
-        ]
-    )
 
     return LaunchDescription([
         DeclareLaunchArgument("camera_enabled", default_value = camera_enabled),
@@ -141,7 +102,5 @@ def generate_launch_description():
         DeclareLaunchArgument("odometry_source", default_value="world"),
         robot_state_publisher,
         gz_spawn_entity,
-        gz_ros2_bridge,
-        lidar_frame_fix,
-        kinect_frame_fix
+        gz_ros2_bridge
     ])
