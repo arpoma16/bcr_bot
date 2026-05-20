@@ -119,6 +119,30 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}]
     )
 
+    stereo_left_compressed = Node(
+        package='image_transport',
+        executable='republish',
+        name='stereo_left_compressed_republisher',
+        arguments=['raw', 'compressed'],
+        remappings=[
+            ('in', 'bcr_bot/stereo_camera/left/image_raw'),
+            ('out/compressed', 'bcr_bot/stereo_camera/left/image_raw/compressed'),
+        ],
+        parameters=[{'use_sim_time': True}]
+    )
+
+    stereo_right_compressed = Node(
+        package='image_transport',
+        executable='republish',
+        name='stereo_right_compressed_republisher',
+        arguments=['raw', 'compressed'],
+        remappings=[
+            ('in', 'bcr_bot/stereo_camera/right/image_raw'),
+            ('out/compressed', 'bcr_bot/stereo_camera/right/image_raw/compressed'),
+        ],
+        parameters=[{'use_sim_time': True}]
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument("camera_enabled", default_value = camera_enabled),
         DeclareLaunchArgument("stereo_camera_enabled", default_value = stereo_camera_enabled),
@@ -128,5 +152,6 @@ def generate_launch_description():
         DeclareLaunchArgument("orientation_yaw", default_value="0.0"),
         DeclareLaunchArgument("odometry_source", default_value="world"),
         robot_state_publisher,
-        gz_spawn_entity, transform_publisher, gz_ros2_bridge
+        gz_spawn_entity, transform_publisher, gz_ros2_bridge,
+        stereo_left_compressed, stereo_right_compressed
     ])

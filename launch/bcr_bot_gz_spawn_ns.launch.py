@@ -90,6 +90,32 @@ def generate_launch_description():
             ([robot_namespace, "/camera_info"], [robot_namespace, "/kinect_camera/camera_info"]),
         ]
     )
+    
+    stereo_left_compressed = Node(
+        package='image_transport',
+        executable='republish',
+        name='stereo_left_compressed_republisher',
+        namespace=robot_namespace,
+        arguments=['raw', 'compressed'],
+        remappings=[
+            ('in', 'stereo_camera/left/image_raw'),
+            ('out/compressed', 'stereo_camera/left/image_raw/compressed'),
+        ],
+        parameters=[{'use_sim_time': True}]
+    )
+
+    stereo_right_compressed = Node(
+        package='image_transport',
+        executable='republish',
+        name='stereo_right_compressed_republisher',
+        namespace=robot_namespace,
+        arguments=['raw', 'compressed'],
+        remappings=[
+            ('in', 'stereo_camera/right/image_raw'),
+            ('out/compressed', 'stereo_camera/right/image_raw/compressed'),
+        ],
+        parameters=[{'use_sim_time': True}]
+    )
 
 
     return LaunchDescription([
@@ -102,5 +128,7 @@ def generate_launch_description():
         DeclareLaunchArgument("odometry_source", default_value="world"),
         robot_state_publisher,
         gz_spawn_entity,
-        gz_ros2_bridge
+        gz_ros2_bridge,
+        stereo_left_compressed,
+        stereo_right_compressed
     ])

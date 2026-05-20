@@ -66,11 +66,12 @@ def generate_launch_description():
         name='initial_pose_publisher',
         output='screen',
         parameters=[{
-            'x': 15.0,      # Cambia estos valores según la posición inicial de tu robot
-            'y': -24.0,      # en el mapa
+            'x': 15.0,
+            'y': -24.0,
             'z': 0.0,
-            'yaw': -1.57,    # Orientación inicial en radianes
-            'delay': 5.0   # Espera 5 segundos para dar tiempo a que todo se inicialice
+            'yaw': -1.57,
+            'delay': 5.0,
+            'robot_namespace': '',
         }]
     )
 
