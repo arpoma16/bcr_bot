@@ -9,7 +9,8 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, Command
 
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -100,6 +101,53 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
+    stereo_resize_container = ComposableNodeContainer(
+        name="stereo_resize_container",
+        namespace=robot_namespace,
+        package="rclcpp_components",
+        executable="component_container",
+        composable_node_descriptions=[
+            ComposableNode(
+                package="image_proc",
+                plugin="image_proc::ResizeNode",
+                name="stereo_left_resize",
+                namespace=robot_namespace,
+                remappings=[
+                    ("image/image_raw", "stereo_camera/left/image_raw"),
+                    ("image/camera_info", "stereo_camera/left/camera_info"),
+                    ("resize/image_raw", "stereo_camera/left/image_resized"),
+                    ("resize/camera_info", "stereo_camera/left/image_resized/camera_info"),
+                ],
+                parameters=[{
+                    "use_sim_time": True,
+                    "use_scale": False,
+                    "width": 640,
+                    "height": 640,
+                }],
+            ),
+            ComposableNode(
+                package="image_proc",
+                plugin="image_proc::ResizeNode",
+                name="stereo_right_resize",
+                namespace=robot_namespace,
+                remappings=[
+                    ("image/image_raw", "stereo_camera/right/image_raw"),
+                    ("image/camera_info", "stereo_camera/right/camera_info"),
+                    ("resize/image_raw", "stereo_camera/right/image_resized"),
+                    ("resize/camera_info", "stereo_camera/right/image_resized/camera_info"),
+                ],
+                parameters=[{
+                    "use_sim_time": True,
+                    "use_scale": False,
+                    "width": 640,
+                    "height": 640,
+                }],
+            ),
+        ],
+        output="screen",
+        parameters=[{"use_sim_time": True}],
+    )
+
     stereo_left_compressed = Node(
         package="image_transport",
         executable="republish",
@@ -107,8 +155,8 @@ def launch_setup(context, *args, **kwargs):
         namespace=robot_namespace,
         arguments=["raw", "compressed"],
         remappings=[
-            ("in", "stereo_camera/left/image_raw"),
-            ("out/compressed", "stereo_camera/left/image_raw/compressed"),
+            ("in", f"/{robot_namespace}/stereo_camera/left/image_resized"),
+            ("out/compressed", f"/{robot_namespace}/stereo_camera/left/image_raw/compressed"),
         ],
         parameters=[{"use_sim_time": True}],
     )
@@ -120,8 +168,8 @@ def launch_setup(context, *args, **kwargs):
         namespace=robot_namespace,
         arguments=["raw", "compressed"],
         remappings=[
-            ("in", "stereo_camera/right/image_raw"),
-            ("out/compressed", "stereo_camera/right/image_raw/compressed"),
+            ("in", f"/{robot_namespace}/stereo_camera/right/image_resized"),
+            ("out/compressed", f"/{robot_namespace}/stereo_camera/right/image_raw/compressed"),
         ],
         parameters=[{"use_sim_time": True}],
     )
@@ -132,6 +180,16 @@ def launch_setup(context, *args, **kwargs):
         executable="relay",
         name=f"{robot_namespace}_tf_relay",
         arguments=[f"/{robot_namespace}/tf", "/tf"],
+        output="screen",
+        parameters=[{"use_sim_time": True}],
+    )
+
+    # Relay tf_static so fixed joints (base_footprint→base_link, etc.) reach Nav2
+    tf_static_relay = Node(
+        package="topic_tools",
+        executable="relay",
+        name=f"{robot_namespace}_tf_static_relay",
+        arguments=[f"/{robot_namespace}/tf_static", "/tf_static"],
         output="screen",
         parameters=[{"use_sim_time": True}],
     )
@@ -152,7 +210,7 @@ def launch_setup(context, *args, **kwargs):
         launch_arguments={
             "use_sim_time": "True",
             "autostart": "true",
-            "map": os.path.join(bcr_bot_path, "config", "factory_map.yaml"),
+            "map": os.path.join(bcr_bot_path, "config", "factory_map_2.yaml"),
             "params_file": configured_params,
             "namespace": robot_namespace,
             "use_namespace": "True",
@@ -180,9 +238,11 @@ def launch_setup(context, *args, **kwargs):
         robot_state_publisher,
         gz_spawn_entity,
         gz_ros2_bridge,
+        stereo_resize_container,
         stereo_left_compressed,
         stereo_right_compressed,
         tf_relay,
+        tf_static_relay,
         nav2,
         initial_pose_node,
     ]

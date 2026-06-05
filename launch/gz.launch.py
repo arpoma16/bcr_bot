@@ -2,7 +2,7 @@
 
 from os.path import join
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.substitutions import LaunchConfiguration,PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
@@ -27,8 +27,9 @@ def generate_launch_description():
     spawn_bcr_bot_node = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(join(bcr_bot_path, "launch", "bcr_bot_gz_spawn.launch.py")),
         launch_arguments={
-            # Pass any arguments if your spawn.launch.py requires
-        }.items()
+            "position_x": "15.0",
+            "position_y": "-23.0",
+            }.items()
     )
 
     return LaunchDescription([
@@ -43,6 +44,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument("use_sim_time", default_value=use_sim_time),
         DeclareLaunchArgument("world_file", default_value=world_file),
-        
-        gz_sim, spawn_bcr_bot_node
+
+        gz_sim,
+        TimerAction(period=15.0, actions=[spawn_bcr_bot_node]),
     ])

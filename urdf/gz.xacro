@@ -4,9 +4,10 @@
     <!-- ........................... SENSOR PLUGIN ................................... -->
 
     <gazebo>
-        <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+        <!-- este plugin ya esta en el mundo -->
+        <!-- <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
             <render_engine>ogre2</render_engine>
-        </plugin>
+        </plugin> -->
 
         <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu">
         </plugin>

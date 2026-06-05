@@ -18,12 +18,11 @@ slam_toolbox:
     mode: mapping
 
 
-    # if you'd like to immediately start continuing a map at a given pose
-    # or at the dock, but they are mutually exclusive, if pose is given
-    # will use pose
-    #map_file_name: test_steve
-    # map_start_pose: [0.0, 0.0, 0.0]
-    #map_start_at_dock: true
+    # Continuar mapeando desde el mapa existente (requiere .yaml + .posegraph)
+    # Si no existe .posegraph, slam_toolbox arranca desde cero ignorando este param.
+    # Para cargar solo el mapa .pgm como fondo visual, usar map_server por separado.
+    map_file_name: /ariac_ws/src/bcr_bot/config/factory_map_2
+    map_start_pose: [0.0, 0.0, 0.0]
 
     debug_logging: false
     throttle_scans: 10
