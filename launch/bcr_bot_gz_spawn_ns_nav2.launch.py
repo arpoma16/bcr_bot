@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Compatibility wrapper: bcr_bot_gz_spawn.launch.py with Nav2, TF relays and stereo resize.
+"""Compatibility wrapper: bcr_bot_gz_spawn.launch.py with Nav2 and stereo resize.
 
 Kept so existing launch files (indra) keep working; it only forwards the arguments.
 """
@@ -35,7 +35,6 @@ def generate_launch_description():
             **{key: LaunchConfiguration(key) for key in DEFAULTS},
             "launch_nav2": "True",
             "stereo_resize": "True",
-            "tf_relay": "True",
         }.items(),
     )
     return LaunchDescription(

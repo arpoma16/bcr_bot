@@ -1,3 +1,8 @@
+# Nav2 parameters for bcr_bot in the factory (real footprint 0.90 x 0.64 m).
+# Nav2 runs inside the robot namespace (bcr_bot_nav2.launch.py). Two placeholders:
+#   <robot_namespace>  topics, replaced by nav2_bringup with "/<ns>"  (e.g. /bcr_bot/scan)
+#   <robot_name>       TF frames, replaced by bcr_bot_nav2.launch.py with "<ns>"  (e.g. bcr_bot/odom)
+# Relative topics (cmd_vel, local_costmap/...) resolve inside the namespace on their own.
 amcl:
   ros__parameters:
     use_sim_time: True
@@ -6,7 +11,7 @@ amcl:
     alpha3: 0.2
     alpha4: 0.2
     alpha5: 0.2
-    base_frame_id: "bcr_bot/base_footprint"
+    base_frame_id: "<robot_name>/base_footprint"
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
     beam_skip_threshold: 0.3
@@ -20,7 +25,7 @@ amcl:
     max_beams: 60
     max_particles: 2000
     min_particles: 500
-    odom_frame_id: "bcr_bot/odom"
+    odom_frame_id: "<robot_name>/odom"
     pf_err: 0.05
     pf_z: 0.99
     recovery_alpha_fast: 0.0
@@ -37,17 +42,25 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    scan_topic: /bcr_bot/scan
-    
+    scan_topic: <robot_namespace>/scan
+
 
 bt_navigator:
   ros__parameters:
     use_sim_time: True
     global_frame: map
-    robot_base_frame: bcr_bot/base_link
-    odom_topic: /bcr_bot/odom
+    robot_base_frame: <robot_name>/base_link
+    odom_topic: <robot_namespace>/odom
     bt_loop_duration: 10
     default_server_timeout: 20
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
     # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
     # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
     # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
@@ -77,7 +90,8 @@ controller_server:
     progress_checker_plugins: ["progress_checker"] # progress_checker_plugin: "progress_checker" For Humble and older
     goal_checker_plugins: ["goal_checker"]
     controller_plugins: ["FollowPath"]
-    cmd_vel_topic: "/bcr_bot/cmd_vel"
+    # Output chain (navigation_launch.py remaps): controller -> cmd_vel_nav -> velocity_smoother
+    # -> cmd_vel_smoothed -> collision_monitor -> cmd_vel. controller_server has no cmd_vel_topic parameter.
 
     progress_checker:
       plugin: "nav2_controller::PoseProgressChecker"
@@ -126,8 +140,8 @@ local_costmap:
     ros__parameters:
       update_frequency: 10.0
       publish_frequency: 5.0
-      global_frame: bcr_bot/odom
-      robot_base_frame: bcr_bot/base_link
+      global_frame: <robot_name>/odom
+      robot_base_frame: <robot_name>/base_link
       use_sim_time: True
       rolling_window: true
       width: 5
@@ -151,7 +165,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: /bcr_bot/scan
+          topic: <robot_namespace>/scan
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -171,7 +185,7 @@ global_costmap:
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: map
-      robot_base_frame: bcr_bot/base_link
+      robot_base_frame: <robot_name>/base_link
       use_sim_time: True
       footprint: "[[0.45, 0.32], [0.45, -0.32], [-0.45, -0.32], [-0.45, 0.32]]"
       footprint_padding: 0.05
@@ -183,7 +197,7 @@ global_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /bcr_bot/scan
+          topic: <robot_namespace>/scan
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -253,8 +267,8 @@ behavior_server:
       plugin: "nav2_behaviors::Wait"
     assisted_teleop:
       plugin: "nav2_behaviors::AssistedTeleop"
-    global_frame: bcr_bot/odom
-    robot_base_frame: bcr_bot/base_link
+    global_frame: <robot_name>/odom
+    robot_base_frame: <robot_name>/base_link
     transform_tolerance: 0.1
     use_sim_time: true
     simulate_ahead_time: 2.0
@@ -287,7 +301,7 @@ velocity_smoother:
     min_velocity: [-1.0, 0.0, -2.0]
     max_accel: [3.0, 0.0, 4.0]  # Incrementado para acelerar más rápido
     max_decel: [-3.0, 0.0, -4.0]
-    odom_topic: "/bcr_bot/odom"
+    odom_topic: "<robot_namespace>/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
@@ -295,10 +309,10 @@ velocity_smoother:
 collision_monitor:
   ros__parameters:
     use_sim_time: True
-    base_frame_id: "bcr_bot/base_footprint"
-    odom_frame_id: "bcr_bot/odom"
+    base_frame_id: "<robot_name>/base_footprint"
+    odom_frame_id: "<robot_name>/odom"
     cmd_vel_in_topic: "cmd_vel_smoothed"
-    cmd_vel_out_topic: "/bcr_bot/cmd_vel"
+    cmd_vel_out_topic: "<robot_namespace>/cmd_vel"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.2
     source_timeout: 1.0
@@ -309,7 +323,8 @@ collision_monitor:
     FootprintApproach:
       type: "polygon"
       action_type: "approach"
-      footprint_topic: "/local_costmap/published_footprint"
+      # Absolute "/local_costmap/..." never matched the namespaced costmap.
+      footprint_topic: "<robot_namespace>/local_costmap/published_footprint"
       time_before_collision: 2.0
       simulation_time_step: 0.1
       min_points: 6
@@ -317,7 +332,7 @@ collision_monitor:
       polygon_pub_topic: "polygon"
     scan:
       type: "scan"
-      topic: "/bcr_bot/scan"
+      topic: "<robot_namespace>/scan"
       min_height: 0.05
       max_height: 2.0
       enabled: True
@@ -331,8 +346,8 @@ docking_server:
     dock_approach_timeout: 30.0
     undock_timeout: 30.0
     max_retries: 3
-    base_frame: "bcr_bot/base_link"
-    fixed_frame: "bcr_bot/odom"
+    base_frame: "<robot_name>/base_link"
+    fixed_frame: "<robot_name>/odom"
     dock_backwards: false
     dock_prestaging_tolerance: 0.5
 

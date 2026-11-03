@@ -6,18 +6,18 @@
 * ""  (default, upstream behaviour): frames without prefix (base_link, odom), global /tf,
   ROS topics under /bcr_bot/* (scan, odom, cmd_vel, ...). Gazebo model name: bcr_bot.
 * "<ns>": every link/joint/frame is prefixed "<ns>/", nodes live in /<ns> and the ROS
-  topics are /<ns>/*. This is what allows several robots in the same world.
+  topics are /<ns>/*. The robot TF is kept in /<ns>/tf and /<ns>/tf_static (what the
+  namespaced Nav2 reads) and relayed to the global /tf and /tf_static (RViz, other tools).
+  This is what allows several robots in the same world.
 
-The extra switches below only exist to keep the two historical flavours (plain spawn and
-spawn + Nav2) reachable from one file; they are collapsed when the Nav2 topology is unified.
+launch_nav2:=true adds bcr_bot_nav2.launch.py (needs a namespace) with the spawn pose as
+initial pose; nav2_map / nav2_params_file override its defaults.
 """
 
-import os
-import tempfile
 from os.path import join
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 
@@ -89,11 +89,11 @@ def launch_setup(context, *args, **kwargs):
     position_x, position_y, orientation_yaw = cfg("position_x"), cfg("position_y"), cfg("orientation_yaw")
     launch_nav2 = _is_true(cfg("launch_nav2"))
     stereo_resize = _is_true(cfg("stereo_resize"))
-    tf_relay = _is_true(cfg("tf_relay")) and bool(ns)
+    tf_relay = bool(ns)
 
     if launch_nav2 and not ns:
         raise RuntimeError("launch_nav2:=true needs a non-empty robot_namespace "
-                           "(Nav2 frames are namespaced) until the Nav2 setup is unified.")
+                           "(Nav2 runs inside the robot namespace with prefixed frames).")
 
     xacro_cmd = ["xacro ", join(bcr_bot_path, "urdf", "bcr_bot.xacro"),
                  " camera_enabled:=", cfg("camera_enabled"),
@@ -201,43 +201,24 @@ def launch_setup(context, *args, **kwargs):
             ))
 
     if launch_nav2:
-        pkg_nav2_dir = get_package_share_directory("nav2_bringup")
+        nav2_args = {
+            "robot_namespace": ns,
+            "position_x": position_x,
+            "position_y": position_y,
+            "orientation_yaw": orientation_yaw,
+        }
+        # Only forward overrides; empty keeps the defaults of bcr_bot_nav2.launch.py.
+        for spawn_key, nav2_key in (("nav2_map", "map"), ("nav2_params_file", "params_file")):
+            if cfg(spawn_key):
+                nav2_args[nav2_key] = cfg(spawn_key)
 
-        # Nav2 params carry the default robot name; rewrite it for this robot.
-        with open(join(bcr_bot_path, "config", "nav2_params2.yaml"), "r") as f:
-            params_content = f.read().replace(DEFAULT_NAME, ns)
-        tmp_params = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
-        tmp_params.write(params_content)
-        tmp_params.close()
-
-        actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(join(pkg_nav2_dir, "launch", "bringup_launch.py")),
-            launch_arguments={
-                "use_sim_time": "True",
-                "autostart": "true",
-                "map": join(bcr_bot_path, "config", "factory_map_2.yaml"),
-                "params_file": tmp_params.name,
-                "namespace": ns,
-                "use_namespace": "True",
-                "use_localization": "True",
-            }.items(),
-        ))
-
-        actions.append(Node(
-            package="bcr_bot",
-            executable="set_initial_pose.py",
-            name=f"{ns}_initial_pose_publisher",
-            output="screen",
-            parameters=[{
-                "x": float(position_x),
-                "y": float(position_y),
-                "z": 0.0,
-                "yaw": float(orientation_yaw),
-                "delay": 10.0,
-                "robot_namespace": ns,
-                "use_sim_time": True,
-            }],
-        ))
+        # Scoped so one robot's Nav2 arguments do not leak into the next spawn.
+        actions.append(GroupAction([
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(join(bcr_bot_path, "launch", "bcr_bot_nav2.launch.py")),
+                launch_arguments=nav2_args.items(),
+            ),
+        ]))
 
     return actions
 
@@ -258,10 +239,12 @@ def generate_launch_description():
         DeclareLaunchArgument("odometry_source", default_value="world",
                               description="Odometry source: 'world' (ground truth) or 'encoders'"),
         DeclareLaunchArgument("launch_nav2", default_value="False",
-                              description="Also start Nav2 (AMCL + map server) and set the initial pose."),
+                              description="Also start Nav2 (bcr_bot_nav2.launch.py) with the spawn pose as initial pose."),
+        DeclareLaunchArgument("nav2_map", default_value="",
+                              description="Map yaml for Nav2 (empty: bcr_bot_nav2.launch.py default)."),
+        DeclareLaunchArgument("nav2_params_file", default_value="",
+                              description="Nav2 params file (empty: bcr_bot_nav2.launch.py default)."),
         DeclareLaunchArgument("stereo_resize", default_value="False",
                               description="Resize stereo images to 640x640 before compressing."),
-        DeclareLaunchArgument("tf_relay", default_value="False",
-                              description="Keep the robot TF in /<ns>/tf and relay it to /tf (needs a namespace)."),
         OpaqueFunction(function=launch_setup),
     ])
