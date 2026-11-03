@@ -1,47 +1,55 @@
-ARG ROS_DISTRO=humble
+ARG ROS_DISTRO=jazzy
 
-# Use base image, https://hub.docker.com/_/ros/
-FROM ros:$ROS_DISTRO-ros-base
+# Official ROS 2 Jazzy base image
+FROM ros:${ROS_DISTRO}-ros-base
 
-# Prevent console from interacting with the user
-# Read more here - https://bobcares.com/blog/debian_frontendnoninteractive-docker
+ARG ROS_DISTRO
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Prevent hash mismatch error for apt-get update, qqq makes the terminal quiet while downloading pkgs
-RUN apt-get clean && rm -rf /var/lib/apt/lists/* && apt-get update -yqqq
+# Runtime directory required by graphical applications such as RViz
+RUN if ! getent group 110 >/dev/null; then groupadd --gid 110 render; fi \
+    && mkdir -p /tmp/runtime-root \
+    && chmod 0700 /tmp/runtime-root
+ENV XDG_RUNTIME_DIR=/tmp/runtime-root
 
-# Set folder for RUNTIME_DIR. Only to prevent warnings when running RViz2 and Gz
-RUN mkdir tmp/runtime-root && chmod 0700 tmp/runtime-root
-ENV XDG_RUNTIME_DIR='/tmp/runtime-root'
-
-# https://stackoverflow.com/questions/51023312/docker-having-issues-installing-apt-utils
-
-# Non Python/ROS Dependencies
-# apt-utils: https://stackoverflow.com/questions/51023312/docker-having-issues-installing-apt-utils
-RUN apt-get install --no-install-recommends -yqqq \
+RUN apt-get update && apt-get install --no-install-recommends -y \
     apt-utils \
+    git \
     vim \
-    git
+    python3-pip \
+    ros-${ROS_DISTRO}-rviz2 \
+    ros-${ROS_DISTRO}-xacro \
+    ros-${ROS_DISTRO}-teleop-twist-keyboard \
+    ros-${ROS_DISTRO}-navigation2 \
+    ros-${ROS_DISTRO}-nav2-bringup \
+    ros-${ROS_DISTRO}-ros-gz-sim \
+    ros-${ROS_DISTRO}-ros-gz-bridge \
+    ros-${ROS_DISTRO}-ros-gz-interfaces \
+    ros-${ROS_DISTRO}-mujoco-ros2-control \
+    ros-${ROS_DISTRO}-mujoco-ros2-control-plugins \
+    ros-${ROS_DISTRO}-ros2controlcli \
+    ros-${ROS_DISTRO}-imu-sensor-broadcaster \
+    ros-${ROS_DISTRO}-depth-image-proc \
+    ros-${ROS_DISTRO}-twist-stamper \
+    ros-${ROS_DISTRO}-fastcdr \
+    ros-${ROS_DISTRO}-fastrtps \
+    ros-${ROS_DISTRO}-fastrtps-cmake-module \
+    ros-${ROS_DISTRO}-rmw-fastrtps-cpp \
+    ros-${ROS_DISTRO}-rmw-fastrtps-shared-cpp \
+    ros-${ROS_DISTRO}-rosidl-dynamic-typesupport-fastrtps \
+    ros-${ROS_DISTRO}-rosidl-typesupport-fastrtps-c \
+    ros-${ROS_DISTRO}-rosidl-typesupport-fastrtps-cpp \
+    && rm -rf /var/lib/apt/lists/*
 
-# Python Dependencies
-RUN apt-get install --no-install-recommends -yqqq \
-    python3-pip
-        
-# Install additional ROS packages
-RUN apt-get install --no-install-recommends -yqq \
-    ros-$ROS_DISTRO-rviz2 \
-    ros-$ROS_DISTRO-xacro \
-    ros-$ROS_DISTRO-teleop-twist-keyboard \
-    ros-$ROS_DISTRO-navigation2 \
-    ros-$ROS_DISTRO-nav2-bringup
-
-# Using shell to use bash commands like 'source'
+# Enable Bash commands such as source
 SHELL ["/bin/bash", "-c"]
 
-# Target workspace for ROS2 packages
+# ROS 2 workspace inside the container
 ARG WORKSPACE=/root/ros2_ws
+ENV WORKSPACE=${WORKSPACE}
 
-# Add target workspace in environment
-ENV WORKSPACE=$WORKSPACE
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
 
-WORKDIR $WORKSPACE
+WORKDIR ${WORKSPACE}
+
+CMD ["bash"]
