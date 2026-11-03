@@ -25,7 +25,7 @@ def generate_launch_description():
     two_d_lidar_enabled = LaunchConfiguration("two_d_lidar_enabled", default=True)
     odometry_source = LaunchConfiguration("odometry_source")
     robot_namespace = LaunchConfiguration("robot_namespace", default='bcr_bot')
-    urdf = join(bcr_bot_path, 'urdf', 'bcr_bot_ns.xacro')
+    urdf = join(bcr_bot_path, 'urdf', 'bcr_bot.xacro')
 
     robot_description_config = Command( \
                     ['xacro ', urdf,

@@ -28,7 +28,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {'robot_description': Command([
-                'xacro ', join(bcr_bot_path, 'urdf/bcr_bot_ns.xacro'),
+                'xacro ', join(bcr_bot_path, 'urdf/bcr_bot.xacro'),
                 ' camera_enabled:=', camera_enabled,
                 ' stereo_camera_enabled:=', stereo_camera_enabled,
                 ' two_d_lidar_enabled:=', two_d_lidar_enabled,

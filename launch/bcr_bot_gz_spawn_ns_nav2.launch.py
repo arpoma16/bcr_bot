@@ -29,7 +29,7 @@ def launch_setup(context, *args, **kwargs):
     robot_namespace = LaunchConfiguration("robot_namespace").perform(context)
     launch_map_server = LaunchConfiguration("launch_map_server").perform(context)
 
-    urdf = join(bcr_bot_path, "urdf", "bcr_bot_ns.xacro")
+    urdf = join(bcr_bot_path, "urdf", "bcr_bot.xacro")
 
     robot_description_config = Command(
         ["xacro ", urdf,
