@@ -45,6 +45,8 @@
     <xacro:arg name="ground_truth_frame" default="map"/>
     <xacro:arg name="sim_gz" default="false" />
     <xacro:arg name="sim_mujoco" default="false" />
+    <!-- Dibujar los rayos del lidar en la GUI de Gazebo (upstream usa false; mas barato con varios robots) -->
+    <xacro:arg name="lidar_visualize" default="true" />
     <xacro:arg name="odometry_source" default="world" />
 
     <xacro:property name="odometry_source" value="$(arg odometry_source)"/>
@@ -60,7 +62,7 @@
     <xacro:include filename="$(find bcr_bot)/urdf/macros.xacro"/>
 
     <xacro:if value="$(arg sim_gz)">
-        <xacro:include filename="$(find bcr_bot)/urdf/gz_ns.xacro"/>
+        <xacro:include filename="$(find bcr_bot)/urdf/gz.xacro"/>
     </xacro:if>
 
     <xacro:if value="$(arg sim_mujoco)">
