@@ -29,6 +29,7 @@ def generate_launch_description():
         launch_arguments={
             "position_x": "15.0",
             "position_y": "-23.0",
+            "robot_namespace": LaunchConfiguration("robot_namespace"),
             }.items()
     )
 
@@ -44,6 +45,8 @@ def generate_launch_description():
 
         DeclareLaunchArgument("use_sim_time", default_value=use_sim_time),
         DeclareLaunchArgument("world_file", default_value=world_file),
+        DeclareLaunchArgument("robot_namespace", default_value="",
+                              description="Empty: upstream naming; otherwise prefix for frames, nodes and topics"),
 
         gz_sim,
         TimerAction(period=15.0, actions=[spawn_bcr_bot_node]),
