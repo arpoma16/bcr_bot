@@ -16,6 +16,7 @@ install(PROGRAMS
         scripts/set_initial_pose.py
         scripts/lift_controller.py
         scripts/cart_carry_adapter.py
+        scripts/cart_handler.py
         scripts/cart_legs.py
         DESTINATION lib/${PROJECT_NAME})
 

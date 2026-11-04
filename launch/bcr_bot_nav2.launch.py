@@ -73,6 +73,16 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{"use_sim_time": _is_true(use_sim_time), "base_frame": f"{ns}/base_link"}],
     ))
 
+    # pick_cart / drop_cart actions (nav2_msgs DockRobot / UndockRobot) over Nav2 + the lift.
+    actions.append(Node(
+        package="bcr_bot",
+        executable="cart_handler.py",
+        name="cart_handler",
+        namespace=ns,
+        output="screen",
+        parameters=[{"use_sim_time": _is_true(use_sim_time), "base_frame": f"{ns}/base_link"}],
+    ))
+
     if _is_true(cfg("set_initial_pose")):
         actions.append(Node(
             package="bcr_bot",
