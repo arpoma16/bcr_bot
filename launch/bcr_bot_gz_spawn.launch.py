@@ -22,7 +22,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 
 from launch_ros.actions import ComposableNodeContainer, Node
-from launch_ros.descriptions import ComposableNode
+from launch_ros.descriptions import ComposableNode, ParameterValue
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -112,7 +112,9 @@ def launch_setup(context, *args, **kwargs):
         executable="robot_state_publisher",
         name="robot_state_publisher",
         namespace=name,
-        parameters=[{"robot_description": Command(xacro_cmd)}, {"use_sim_time": True}],
+        # str: otherwise launch_ros parses the URDF as YAML and any "word: " in a comment breaks it.
+        parameters=[{"robot_description": ParameterValue(Command(xacro_cmd), value_type=str)},
+                    {"use_sim_time": True}],
         remappings=rsp_remaps,
     )
 
