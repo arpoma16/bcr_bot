@@ -62,6 +62,17 @@ def launch_setup(context, *args, **kwargs):
         ]),
     ]
 
+    # Feeds scan_filtered to AMCL/costmaps/collision_monitor and swaps the footprint while
+    # a cart is lifted (follows lift_state from the spawn's lift_controller).
+    actions.append(Node(
+        package="bcr_bot",
+        executable="cart_carry_adapter.py",
+        name="cart_carry_adapter",
+        namespace=ns,
+        output="screen",
+        parameters=[{"use_sim_time": _is_true(use_sim_time), "base_frame": f"{ns}/base_link"}],
+    ))
+
     if _is_true(cfg("set_initial_pose")):
         actions.append(Node(
             package="bcr_bot",

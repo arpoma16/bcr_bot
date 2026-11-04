@@ -3,6 +3,10 @@
 #   <robot_namespace>  topics, replaced by nav2_bringup with "/<ns>"  (e.g. /bcr_bot/scan)
 #   <robot_name>       TF frames, replaced by bcr_bot_nav2.launch.py with "<ns>"  (e.g. bcr_bot/odom)
 # Relative topics (cmd_vel, local_costmap/...) resolve inside the namespace on their own.
+# Laser consumers (AMCL, costmaps, collision_monitor) read scan_filtered from
+# scripts/cart_carry_adapter.py: the raw scan, minus the cart legs while the lift is up.
+# The same node swaps the costmap footprint to the cart's while carrying; leg cells left
+# from before the lift are removed by footprint clearing (enabled by default).
 amcl:
   ros__parameters:
     use_sim_time: True
@@ -42,7 +46,7 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    scan_topic: <robot_namespace>/scan
+    scan_topic: <robot_namespace>/scan_filtered
 
 
 bt_navigator:
@@ -165,7 +169,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: <robot_namespace>/scan
+          topic: <robot_namespace>/scan_filtered
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -197,7 +201,7 @@ global_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: <robot_namespace>/scan
+          topic: <robot_namespace>/scan_filtered
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -335,7 +339,7 @@ collision_monitor:
       polygon_pub_topic: "polygon"
     scan:
       type: "scan"
-      topic: "<robot_namespace>/scan"
+      topic: "<robot_namespace>/scan_filtered"
       min_height: 0.05
       max_height: 2.0
       enabled: True

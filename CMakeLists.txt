@@ -15,6 +15,7 @@ install(PROGRAMS
         scripts/remapper.py
         scripts/set_initial_pose.py
         scripts/lift_controller.py
+        scripts/cart_carry_adapter.py
         DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
