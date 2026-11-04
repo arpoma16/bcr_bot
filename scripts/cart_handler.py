@@ -6,9 +6,12 @@
       use_dock_id must be false (there is no cart database). dock_type is ignored.
       1. NAV_TO_STAGING_POSE: NavigateToPose to staging_distance behind the cart, facing it
          (skipped with navigate_to_staging_pose=false).
-      2. INITIAL_PERCEPTION / CONTROLLING: Nav2 stops within xy_goal_tolerance (0.25 m) and
-         AMCL is off by up to ~0.1 m, but the legs leave ~0.10 m per side. So the cart pose is
-         measured from its legs in the scan (cart_legs.py) and the robot is corrected on the
+      2. INITIAL_PERCEPTION / CONTROLLING: AMCL does not update while the robot stands still
+         (update_min_d / update_min_a), so after Nav2 stops it can be off by 0.35 m and 9.5 deg
+         (measured): first localization_updates calls to request_nomotion_update (0.18 m / 0.6 deg
+         at worst after them), so the cart guess falls within leg_search_radius.
+         Nav2 stops within xy_goal_tolerance (0.25 m) and the legs leave ~0.10 m per side, so the
+         cart pose is measured from its legs in the scan (cart_legs.py) and the robot is corrected on the
          cart axis (spin + drive_on_heading + spin) until within lateral_tolerance /
          yaw_tolerance, checked again at pre_entry_distance; then drive_on_heading under the
          cart and lift_up.
@@ -39,7 +42,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
-from std_srvs.srv import Trigger
+from std_srvs.srv import Empty, Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 import cart_legs
@@ -97,6 +100,9 @@ class CartHandler(Node):
         self.leg_model = cart_legs.leg_model(p('leg_x', 0.58).value, p('leg_y', 0.48).value)
         self.leg_search_radius = p('leg_search_radius', 0.25).value
         self.min_legs = p('min_legs', 2).value
+        # Forced AMCL updates before looking for the legs (0 disables).
+        self.localization_updates = p('localization_updates', 10).value
+        self.localization_period = p('localization_period', 0.3).value   # [s] between updates
 
         self.lifted = False
         self._scan = None              # (LaserScan, monotonic receive time)
@@ -113,6 +119,7 @@ class CartHandler(Node):
         self.backup = ActionClient(self, BackUp, 'backup', callback_group=group)
         self.lift_up = self.create_client(Trigger, 'lift_up', callback_group=group)
         self.lift_down = self.create_client(Trigger, 'lift_down', callback_group=group)
+        self.nomotion = self.create_client(Empty, 'request_nomotion_update', callback_group=group)
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(Bool, 'lift_state', self._lift_state_cb, latched,
@@ -220,6 +227,29 @@ class CartHandler(Node):
         if not future.result().success:
             raise Failed(code, f'{what}: {future.result().message}')
 
+    def _settle_localization(self, handle):
+        """Let AMCL correct itself while the robot stands still (it only updates on motion)."""
+        if self.localization_updates <= 0:
+            return
+        if not self.nomotion.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('request_nomotion_update not available: '
+                                   'looking for the legs with the current AMCL pose')
+            return
+        before = self._robot_pose()
+        for _ in range(self.localization_updates):
+            if not self._wait(self.nomotion.call_async(Empty.Request()), handle, self.server_timeout):
+                self.get_logger().warn('request_nomotion_update timed out')
+                return
+            deadline = time.monotonic() + self.localization_period
+            while time.monotonic() < deadline:   # one filter update per scan
+                if handle.is_cancel_requested:
+                    raise Canceled()
+                time.sleep(0.05)
+        after = self._robot_pose()
+        self.get_logger().info(
+            f'localization settled: AMCL moved {math.hypot(after[0] - before[0], after[1] - before[1]):.3f} m, '
+            f'{math.degrees(_wrap(after[2] - before[2])):+.1f} deg')
+
     def _spin_to(self, target_yaw, handle):
         _, _, yaw = self._robot_pose()
         delta = _wrap(target_yaw - yaw)
@@ -288,12 +318,15 @@ class CartHandler(Node):
             self._run(self.nav, NavigateToPose.Goal(pose=staging), handle,
                       float(req.max_staging_time), DOCK.FAILED_TO_STAGE, 'navigate to staging pose')
 
+        feedback(DOCK_FB.INITIAL_PERCEPTION)
+        self._settle_localization(handle)
+
         cart = (cx, cy, cyaw)
         attempt = 0          # corrections made; getting closer to pre-entry does not count
         approached = False
         while True:
-            # The cart pose comes from its legs in the scan, not from AMCL: localization is off
-            # by up to ~0.1 m, as much as the clearance between the robot and the legs.
+            # The cart pose comes from its legs in the scan, not from AMCL: even settled,
+            # localization is off by up to ~0.18 m, more than the clearance to the legs.
             feedback(DOCK_FB.INITIAL_PERCEPTION)
             cart = self._detect_cart(cart)
             cx, cy, cyaw = cart
