@@ -259,7 +259,11 @@ behavior_server:
   ros__parameters:
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
-    cycle_frequency: 10.0
+    # 20 Hz, min_rotational_vel 0.1 and rotational_acc_lim 1.0: Spin stops only after crossing
+    # the target, at sqrt(2 * acc * remaining) but no less than min_rotational_vel, so with
+    # 10 Hz / 0.4 rad/s / 3.2 rad/s^2 small turns overshot ~2-3 deg, too coarse to align under
+    # a cart (scripts/cart_handler.py).
+    cycle_frequency: 20.0
     behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
     spin:
       plugin: "nav2_behaviors::Spin"
@@ -280,8 +284,8 @@ behavior_server:
     use_sim_time: true
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    min_rotational_vel: 0.1
+    rotational_acc_lim: 1.0
 
 robot_state_publisher:
   ros__parameters:
