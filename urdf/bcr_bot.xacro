@@ -36,14 +36,17 @@
          lift_block_height = skirt + plate (mesh z 252 -> 337 mm). -->
     <xacro:property name="lift_stroke" value="0.08"/>
     <xacro:property name="lift_mass" value="2.0"/>
-    <!-- Force PID (gz JointPositionController). lift_force_max caps the PID output [N] and
-         lift_damping [N.s/m] sets the speed, v ~ (force - load weight) / damping:
-         empty ~0.05 m/s, with a 20 kg cart ~0.04 m/s up and ~0.06 m/s down.
+    <!-- Force PID (gz JointPositionController, see gz.xacro). lift_force_max caps the PID output [N].
+         Keep lift_damping LOW. With DART, a high joint damping plus friction at the plate contact
+         eats the lift force under load (measured, damping 20000 lifted ~6 kg, 10000 nothing,
+         5000 sagged with 20 kg, 500 lifts the 20 kg cart). The braking is done by the PID d_gain.
+         The controller is stiff (8 cm in ~0.25 s); a smooth motion has to come from ramped
+         setpoints on lift_cmd.
          The joint velocity limit stays loose, because with DART a prismatic joint near a low
          velocity limit misbehaves (gazebosim/gz-sim#2785). -->
     <xacro:property name="lift_force_max" value="1000"/>
     <xacro:property name="lift_effort" value="2000"/>
-    <xacro:property name="lift_damping" value="20000"/>
+    <xacro:property name="lift_damping" value="500"/>
     <xacro:property name="lift_joint_velocity_limit" value="1.0"/>
     <!-- High friction on the plate so the cart does not slide when braking or turning. -->
     <xacro:property name="lift_friction" value="1000"/>

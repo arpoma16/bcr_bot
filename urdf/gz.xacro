@@ -52,14 +52,16 @@
         <!-- Target height of the plate [m, 0 .. lift_stroke] on <ns>/lift_cmd (gz.msgs.Double).
              Force PID. Velocity commands (use_velocity_commands) did not move the joint with DART.
              p saturates the force until ~2 cm from the target, i (capped by i_max) removes the
-             sag under the cart weight, and the joint damping sets the speed. -->
+             sag under the cart weight, and d brakes (instead of a high joint damping, see
+             lift_damping in bcr_bot.xacro). Validated in Gazebo with a 20 kg box and with
+             models/lift_cart from indra (lift, drive, turn, lower, back out). -->
         <plugin filename="gz-sim-joint-position-controller-system"
                 name="gz::sim::systems::JointPositionController">
             <joint_name>${prefix}lift_joint</joint_name>
             <topic>${prefix}lift_cmd</topic>
             <p_gain>50000</p_gain>
             <i_gain>50000</i_gain>
-            <d_gain>0.0</d_gain>
+            <d_gain>3000</d_gain>
             <i_max>400</i_max>
             <i_min>-400</i_min>
             <cmd_max>${lift_force_max}</cmd_max>
