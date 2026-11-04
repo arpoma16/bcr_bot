@@ -145,7 +145,18 @@ def launch_setup(context, *args, **kwargs):
         remappings=bridge_remaps,
     )
 
-    actions = [robot_state_publisher, gz_spawn_entity, gz_ros2_bridge]
+    # Lift platform services (lift_up / lift_down, lift_state) over the bridged lift_cmd.
+    lift_controller = Node(
+        package="bcr_bot",
+        executable="lift_controller.py",
+        name="lift_controller",
+        namespace=name,
+        output="screen",
+        parameters=[{"use_sim_time": True,
+                     "joint_name": f"{ns}/lift_joint" if ns else "lift_joint"}],
+    )
+
+    actions = [robot_state_publisher, gz_spawn_entity, gz_ros2_bridge, lift_controller]
 
     # Stereo: optionally resize before compressing (lighter for the web/HMI).
     stereo_src = "image_resized" if stereo_resize else "image_raw"
