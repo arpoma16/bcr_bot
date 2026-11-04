@@ -31,6 +31,25 @@
     <xacro:property name="two_d_lidar_min_range" value="0.55"/>
     <xacro:property name="two_d_lidar_max_range" value="16"/>
 
+    <!-- Lift platform (Kiva-style): the black top block (skirt + plate) of the mesh rises on a
+         prismatic joint. lift_plate_z = top of the plate in chassis_link at the lowest position;
+         lift_block_height = skirt + plate (mesh z 252 -> 337 mm). -->
+    <xacro:property name="lift_stroke" value="0.08"/>
+    <xacro:property name="lift_mass" value="2.0"/>
+    <!-- Force PID (gz JointPositionController). lift_force_max caps the PID output [N] and
+         lift_damping [N.s/m] sets the speed, v ~ (force - load weight) / damping:
+         empty ~0.05 m/s, with a 20 kg cart ~0.04 m/s up and ~0.06 m/s down.
+         The joint velocity limit stays loose, because with DART a prismatic joint near a low
+         velocity limit misbehaves (gazebosim/gz-sim#2785). -->
+    <xacro:property name="lift_force_max" value="1000"/>
+    <xacro:property name="lift_effort" value="2000"/>
+    <xacro:property name="lift_damping" value="20000"/>
+    <xacro:property name="lift_joint_velocity_limit" value="1.0"/>
+    <!-- High friction on the plate so the cart does not slide when braking or turning. -->
+    <xacro:property name="lift_friction" value="1000"/>
+    <xacro:property name="lift_plate_z" value="0.132"/>
+    <xacro:property name="lift_block_height" value="0.085"/>
+
     <xacro:property name="camera_baseline" value="0.06"/>
     <xacro:property name="camera_height" value="0.10"/>
     <xacro:property name="camera_horizontal_fov" value="60"/>
@@ -92,7 +111,8 @@
         <visual>
             <origin xyz="0 0 -0.205" rpy="0 0 0" />
             <geometry>
-                <mesh filename="file://$(find bcr_bot)/meshes/bcr_bot_mesh.dae" scale="1 1 1"/>
+                <!-- Body only; the top block is the visual of lift_link. -->
+                <mesh filename="file://$(find bcr_bot)/meshes/bcr_bot_body.dae" scale="1 1 1"/>
             </geometry>
         </visual>
 
@@ -261,28 +281,41 @@
 
     </xacro:if>
 
-    <!-- ............................. ROOF ........................................ -->
+    <!-- ............................. LIFT PLATFORM ................................ -->
 
-    <link name="${prefix}roof_link">
+    <!-- Frame on the top surface of the plate (what touches the cart). -->
+    <link name="${prefix}lift_link">
 
         <collision>
-            <origin xyz="0 0 0" rpy="0 0 0" />
+            <origin xyz="0 0 ${-lift_block_height/2}" rpy="0 0 0" />
             <geometry>
-                <box size="${chassis_length} ${chassis_width} 0.015"/>
+                <box size="${chassis_length} ${chassis_width} ${lift_block_height}"/>
             </geometry>
         </collision>
 
+        <visual>
+            <!-- Same mesh frame as chassis_link's visual (-0.205), seen from the plate top. -->
+            <origin xyz="0 0 ${-0.205 - lift_plate_z}" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="file://$(find bcr_bot)/meshes/bcr_bot_top.dae" scale="1 1 1"/>
+            </geometry>
+        </visual>
+
         <inertial>
-            <mass value="1"/>
-            <xacro:box_inertia m="1" x="1" y="0.6" z = "0.015"/>
+            <origin xyz="0 0 ${-lift_block_height/2}" rpy="0 0 0" />
+            <mass value="${lift_mass}"/>
+            <xacro:box_inertia m="${lift_mass}" x="${chassis_length}" y="${chassis_width}" z="${lift_block_height}"/>
         </inertial>
 
     </link>
 
-    <joint name="${prefix}roof_joint" type="fixed">
+    <joint name="${prefix}lift_joint" type="prismatic">
         <parent link="${prefix}chassis_link"/>
-        <child link="${prefix}roof_link"/>
-        <origin xyz="0 0 0.16" rpy="0 0 0" />
+        <child link="${prefix}lift_link"/>
+        <origin xyz="0 0 ${lift_plate_z}" rpy="0 0 0" />
+        <axis xyz="0 0 1"/>
+        <limit lower="0.0" upper="${lift_stroke}" effort="${lift_effort}" velocity="${lift_joint_velocity_limit}"/>
+        <dynamics damping="${lift_damping}" friction="0.0"/>
     </joint>
 
     <!-- ............................. CONVEYOR ........................................ -->

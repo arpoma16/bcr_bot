@@ -45,6 +45,7 @@ def _bridge_entries(ns, name):
     # (gazebo topic suffix, "ros_type<direction>gz_type", ROS topic override or None)
     entries = [
         ("cmd_vel", "geometry_msgs/msg/Twist@gz.msgs.Twist", None),
+        ("lift_cmd", "std_msgs/msg/Float64]gz.msgs.Double", None),
         ("odometry", "nav_msgs/msg/Odometry[gz.msgs.Odometry", ros + "odom"),
         ("tf", "tf2_msgs/msg/TFMessage[gz.msgs.Pose_V", f"/{ns}/tf" if ns else "/tf"),
         ("scan", "sensor_msgs/msg/LaserScan[gz.msgs.LaserScan", None),

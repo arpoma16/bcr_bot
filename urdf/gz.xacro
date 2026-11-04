@@ -47,6 +47,25 @@
             <frame_id>${prefix}odom</frame_id>
             <child_frame_id>${prefix}base_footprint</child_frame_id>
         </plugin>
+
+        <!-- ........................... LIFT PLATFORM ................................... -->
+        <!-- Target height of the plate [m, 0 .. lift_stroke] on <ns>/lift_cmd (gz.msgs.Double).
+             Force PID. Velocity commands (use_velocity_commands) did not move the joint with DART.
+             p saturates the force until ~2 cm from the target, i (capped by i_max) removes the
+             sag under the cart weight, and the joint damping sets the speed. -->
+        <plugin filename="gz-sim-joint-position-controller-system"
+                name="gz::sim::systems::JointPositionController">
+            <joint_name>${prefix}lift_joint</joint_name>
+            <topic>${prefix}lift_cmd</topic>
+            <p_gain>50000</p_gain>
+            <i_gain>50000</i_gain>
+            <d_gain>0.0</d_gain>
+            <i_max>400</i_max>
+            <i_min>-400</i_min>
+            <cmd_max>${lift_force_max}</cmd_max>
+            <cmd_min>${-lift_force_max}</cmd_min>
+            <initial_position>0.0</initial_position>
+        </plugin>
     </gazebo>
 
     <!-- ............................. ground truth .................................... -->
@@ -68,6 +87,13 @@
         </plugin>
     </gazebo>
     </xacro:if>
+
+    <!-- ........................... LIFT PLATFORM friction ............................ -->
+
+    <gazebo reference="${prefix}lift_link">
+        <mu1>${lift_friction}</mu1>
+        <mu2>${lift_friction}</mu2>
+    </gazebo>
 
     <!-- ........................... 2D LIDAR config ................................... -->
 
