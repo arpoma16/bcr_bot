@@ -202,6 +202,32 @@ For the included MuJoCo warehouse map:
 ros2 launch bcr_bot nav2.launch.py map:="$(ros2 pkg prefix --share bcr_bot)/config/bcr_map_mujoco.yaml"
 ```
 
+### Lift platform and carts (this fork, Gz Sim)
+
+The black top block of the robot is a Kiva-style lift (`lift_joint`, prismatic, 0 to 0.08 m), driven by the
+gz `JointPositionController` (force PID). Everything below lives inside the robot namespace `/<ns>`:
+
+| Interface | Type | Started by |
+|---|---|---|
+| `lift_up`, `lift_down` | `std_srvs/Trigger` (ramped, waits for `joint_states`) | `bcr_bot_gz_spawn.launch.py` (`scripts/lift_controller.py`) |
+| `lift_state` | `std_msgs/Bool`, transient local, true = up | same |
+| `lift_cmd` | `std_msgs/Float64`, target height without ramp | bridge |
+| `pick_cart` | `nav2_msgs/action/DockRobot`: `dock_pose` = cart centre in `map`, `use_dock_id: false` | `bcr_bot_nav2.launch.py` (`scripts/cart_handler.py`) |
+| `drop_cart` | `nav2_msgs/action/UndockRobot` | same |
+
+`pick_cart` navigates to a staging pose, measures the cart from its four legs in the laser scan (`scripts/cart_legs.py`),
+aligns on the cart axis, drives under it and lifts it. While a cart is up, `scripts/cart_carry_adapter.py` removes the
+legs from the scan (`scan_filtered`, read by AMCL, the costmaps and the collision monitor) and switches the costmap
+footprint to the cart's. The cart model (deck underside 0.375 m, 1.12 x 0.92 m between legs) is
+`models/lift_cart` in the `indra` package; design notes and measurements in `indra/docs/LIFT_CARTS.md`.
+
+```bash
+ros2 service call /bcr_bot_1/lift_up std_srvs/srv/Trigger
+ros2 action send_goal /bcr_bot_1/pick_cart nav2_msgs/action/DockRobot \
+  "{use_dock_id: false, dock_pose: {header: {frame_id: map}, pose: {position: {x: 15.0, y: -26.0}, orientation: {z: -0.7071068, w: 0.7071068}}}}"
+ros2 action send_goal /bcr_bot_1/drop_cart nav2_msgs/action/UndockRobot "{max_undocking_time: 40.0}"
+```
+
 ### Simulation and Visualization
 1. Gz Sim (Ignition Gazebo) (small_warehouse World):
 	![](res/gz.jpg)
