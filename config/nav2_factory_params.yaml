@@ -267,7 +267,10 @@ behavior_server:
       plugin: "nav2_behaviors::Wait"
     assisted_teleop:
       plugin: "nav2_behaviors::AssistedTeleop"
-    global_frame: <robot_name>/odom
+    # Jazzy reads local_frame (default "odom", which does not exist with namespaced frames:
+    # spin/backup/drive_on_heading aborted with TF_ERROR) and global_frame (default "map").
+    local_frame: <robot_name>/odom
+    global_frame: map
     robot_base_frame: <robot_name>/base_link
     transform_tolerance: 0.1
     use_sim_time: true
