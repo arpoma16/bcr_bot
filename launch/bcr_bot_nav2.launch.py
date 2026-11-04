@@ -81,9 +81,9 @@ def launch_setup(context, *args, **kwargs):
 
     if _is_true(cfg("rviz")):
         # Same node nav2_bringup/rviz_launch.py builds for a namespace, without its
-        # "shutdown everything when RViz closes" handler.
+        # "shutdown everything when RViz closes" handler. bcr_bot keeps its own copy of the view.
         rviz_config = ReplaceString(
-            source_file=join(nav2_bringup_dir, "rviz", "nav2_namespaced_view.rviz"),
+            source_file=join(get_package_share_directory("bcr_bot"), "rviz", "nav2_namespaced_view.rviz"),
             replacements={"<robot_namespace>": f"/{ns}"},
         )
         actions.append(Node(
