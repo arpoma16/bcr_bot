@@ -256,7 +256,7 @@ While a cart is up, `scripts/cart_carry_adapter.py` removes the
 returns inside the cart filter box from the scan, including its legs (`scan_filtered`, read by
 AMCL, the costmaps and the collision monitor), and switches the costmap
 footprint to the cart's. The cart model (deck underside 0.375 m, 1.12 x 0.92 m between legs) is
-`models/lift_cart` in the `indra` package; design notes and measurements in `indra/docs/LIFT_CARTS.md`.
+`models/lift_cart` in the `indra` package; design notes, measurements and limits in `docs/LIFT_CARTS.md`.
 
 For guarded straight segments only, the adapter grants a renewable 0.6 s robot-footprint lease
 through the internal `cart_straight_footprint` SetBool service. It retains cart scan filtering;

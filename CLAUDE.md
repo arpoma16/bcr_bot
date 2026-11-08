@@ -19,7 +19,7 @@ El README mezcla instrucciones de upstream (Gazebo, MuJoCo, Isaac Sim) con la se
 | Tests offline | `test/` | Fork (pytest, sin ROS) |
 | Upstream sin tocar | `launch/gz.launch.py`, `nav2.launch.py`, `nav2_simple.launch.py`, `mapping*.launch.py`, `mujoco.launch.py`, `rviz.launch.py`, `config/nav2_params.yaml`, `mjcf/`, `usd/`, `worlds/` | Legado/upstream; `indra` no los usa en producción. No refactorizar sin pedirlo |
 
-El mundo, el modelo `lift_cart` y las estaciones viven en el paquete `indra` (`models/lift_cart`, `indra/docs/LIFT_CARTS.md`), no aquí.
+El mundo, el modelo `lift_cart` y las estaciones viven en el paquete `indra` (`models/lift_cart`, `indra/docs/world/CARTS.md`), no aquí. El diseño, las mediciones y los límites de los carros están en `docs/LIFT_CARTS.md` de este repo; los parámetros, en el README.
 
 ## Interfaces de lift y carros (todas dentro de `/<ns>`)
 
