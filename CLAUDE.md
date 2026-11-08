@@ -72,3 +72,6 @@ ros2 launch bcr_bot nav2_factory.launch.py
 - `docs/NAV2_NAMESPACE.md` describe el `nav2.launch.py` heredado (namespace por defecto `bcr_bot`), no el flujo de `bcr_bot_nav2.launch.py`.
 - `config/` tiene varios mapas (`factory_map*.yaml`, `bcr_map*.yaml`) y `factory_map_2_backup.pgm`/`factory_map_aux.pgm`; el que usa Nav2 de fábrica por defecto es `factory_map_2.yaml`.
 - No hay `.claude/` ni `.agents/` con contenido útil (carpetas vacías).
+- Con el carro levantado, cualquier movimiento con chequeo de colisión falla: RMF→Nav2 devolvió status 6 cuatro veces y un `BackUp` directo de 1,6 m dio ABORTED error 714 `COLLISION_AHEAD`.
+  `nav2_msgs/BackUp` instalado no tiene `disable_collision_checks`: por eso los tramos staging↔centro los hace `cart_handler` en línea recta, no Nav2.
+- Riesgo abierto: la tolerancia de colocación de 0,15 m puede no cubrir el error de AMCL medido (hasta 0,18 m / 0,6°). Hipótesis (nunca confirmada) del fallo de la prueba R3 en `pick_cart`: la guarda comparaba yaw absoluto contra el eje de `map` y rechazaba límites >0,01 m/1°/0,02 m; se relajó a 0,03 m / 2° / 0,04 m con deriva relativa al inicio del tramo. La prueba R4 debe capturar la línea `straight-motion maxima` (nivel info) para medir la desviación real.
