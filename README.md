@@ -213,19 +213,93 @@ gz `JointPositionController` (force PID). Everything below lives inside the robo
 | `lift_state` | `std_msgs/Bool`, transient local, true = up | same |
 | `lift_cmd` | `std_msgs/Float64`, target height without ramp | bridge |
 | `pick_cart` | `nav2_msgs/action/DockRobot`: `dock_pose` = cart centre in `map`, `use_dock_id: false` | `bcr_bot_nav2.launch.py` (`scripts/cart_handler.py`) |
+| `place_cart` | `nav2_msgs/action/DockRobot`: destination centre/orientation in `dock_pose`, `use_dock_id: false` | same |
 | `drop_cart` | `nav2_msgs/action/UndockRobot` | same |
 
 `pick_cart` navigates to a staging pose, measures the cart from its four legs in the laser scan (`scripts/cart_legs.py`),
-aligns on the cart axis, drives under it and lifts it. While a cart is up, `scripts/cart_carry_adapter.py` removes the
+aligns on the cart axis, drives under it, lifts it, and reverses `staging_distance` (default 1.8 m)
+on the entry axis. Set `navigate_to_staging_pose: false` when RMF already brought the robot to staging.
+Pickup alignment uses `lateral_tolerance` (default 0.04 m predicted lateral error)
+and `yaw_tolerance` (default 0.0523599 rad, 3 degrees), without tighter internal caps.
+`place_cart` requires a raised lift and a start within 0.5 m of the destination staging pose
+(`centre - 1.8 * [cos(yaw), sin(yaw)]`). It corrects alignment at staging with the full cart
+footprint, advances 1.8 m, lowers, and reverses 1.8 m to staging. It does not navigate to the
+station centre with NavigateToPose; `navigate_to_staging_pose` and `max_staging_time` are unused
+for this action. `drop_cart` keeps its existing behavior: lower where it is and reverse
+`backout_distance` (default 1.3 m), using UndockRobot's `max_undocking_time`.
+Placement compensates the measured cart offset when computing the robot target and staging.
+It refuses an unmeasured cart, cart yaw relative to the robot over 0.5 degrees, or a correction
+that exceeds `place_staging_compensation_limit` (default 0.10 m). Before lowering, the
+estimated cart centre must satisfy `place_tolerance_xy` (default 0.15 m) and
+`place_tolerance_yaw` (default 0.0523599 rad, 3 degrees). This map-frame check allows
+AMCL uncertainty; the independent raw-laser guard protects the physical entry path.
+
+Placement parameters (lengths in metres, angles in radians):
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `place_tolerance_xy` | `0.15` | Maximum estimated cart-centre error before lowering |
+| `place_tolerance_yaw` | `0.05235987755982989` (3 degrees) | Maximum estimated cart-heading error before lowering |
+| `place_staging_along_tolerance` | `0.05` | Accepted along-axis error at staging |
+| `place_staging_lateral_tolerance` | `max(0.03, straight_lateral_limit)`; normally `0.03` | Accepted lateral staging error |
+| `place_staging_compensation_limit` | `0.10` | Maximum difference between compensated and nominal staging |
+
+These placement tolerances must be finite and positive. The 3 cm staging lateral default
+accounts for map-frame arrival/localization uncertainty independently of `straight_lateral_limit`
+(still 0.01 m by default), which limits relative drift during translation in odom.
+
+While a cart is up, `scripts/cart_carry_adapter.py` removes the
 legs from the scan (`scan_filtered`, read by AMCL, the costmaps and the collision monitor) and switches the costmap
 footprint to the cart's. The cart model (deck underside 0.375 m, 1.12 x 0.92 m between legs) is
 `models/lift_cart` in the `indra` package; design notes and measurements in `indra/docs/LIFT_CARTS.md`.
+
+For guarded straight segments only, the adapter grants a renewable 0.6 s robot-footprint lease
+through the internal `cart_straight_footprint` SetBool service. It retains cart scan filtering;
+the handler independently checks the **raw** 360-degree scan in the 0.75 m strip immediately
+beyond the leading cart edge, over the full cart width without lateral inflation. For a
+cart rotated relative to the robot, the exact extrusion along the robot's direction also
+includes the newly swept side wedge, excluding the currently occupied cart rectangle. Any return
+in that strip aborts, including a static obstruction. Both costmaps must publish the robot
+footprint before movement. The lease is released on every exit and expires if refresh stops.
+Unknown cart geometry refuses a lease. A lease is never used for rotation. Both the adapter
+and the costmaps must acknowledge full footprint restoration before a maneuver returns;
+missing confirmation latches a fault.
+
+Straight-motion defaults: speed at most 0.15 m/s; `straight_lateral_limit` 0.01 m;
+`straight_yaw_limit` 0.0174533 rad; combined `straight_envelope` 0.02 m for centre drift
+plus lateral corner excursion; `straight_data_timeout` 0.3 s; `straight_lookahead` 0.75 m.
+These bounds cannot be loosened above the stated limits (or below the lookahead) through
+parameters. `motion_frame` defaults to the namespaced odom frame to avoid AMCL jumps;
+`straight_footprint_padding` defaults to the costmaps' 0.05 m. No fresh scan/odom TF, missing
+laser TF, invalid scan coverage, lift inconsistency, footprint loss, drift, or cancellation
+stops the action. Endpoint odometry must be within 3 cm of commanded displacement.
+An unconfirmed cancellation latches a fault and rejects further cart goals. The private
+`~/reset_fault` service (`std_srvs/Trigger`; normally `/<robot>/cart_handler/reset_fault`)
+clears it only after receiving `lift_state`, confirming no tracked motion remains pending,
+and obtaining normal-footprint acknowledgments from the adapter and both costmaps.
+Normal means cart footprint while raised, robot footprint while lowered. The reset releases
+any footprint lease before checking. It refuses an active maneuver, unavailable or mismatched
+state, missing footprint confirmation, or a lift-state transition during the check; its
+response has `success=false` and a reason. It does not move the robot or change lift height.
+`place_cart` uses DockRobot errors: no raised cart or invalid pose = `DOCK_NOT_VALID`,
+`use_dock_id` = `DOCK_NOT_IN_DB`, staging position = `FAILED_TO_STAGE`, motion/lift =
+`FAILED_TO_CONTROL`.
+
+Offline checks do not establish stopping distance, lidar visibility through cart-leg shadows,
+cart slip, localization accuracy, or clearance over the whole corridor. A 360-degree scan
+does not guarantee unoccluded coverage. The 0.75 m lookahead is a conservative software
+default requiring measured braking/cancellation validation. Endpoint map clearance alone
+does not guarantee the corridor is clear. Validate the tight-station maneuver in the isolated
+simulation before using these changes on hardware.
 
 ```bash
 ros2 service call /bcr_bot_1/lift_up std_srvs/srv/Trigger
 ros2 action send_goal /bcr_bot_1/pick_cart nav2_msgs/action/DockRobot \
   "{use_dock_id: false, dock_pose: {header: {frame_id: map}, pose: {position: {x: 15.0, y: -26.0}, orientation: {z: -0.7071068, w: 0.7071068}}}}"
 ros2 action send_goal /bcr_bot_1/drop_cart nav2_msgs/action/UndockRobot "{max_undocking_time: 40.0}"
+ros2 action send_goal /bcr_bot_1/place_cart nav2_msgs/action/DockRobot \
+  "{use_dock_id: false, dock_pose: {header: {frame_id: map}, pose: {position: {x: 15.0, y: -28.0}, orientation: {z: -0.7071068, w: 0.7071068}}}}"
+ros2 service call /bcr_bot_1/cart_handler/reset_fault std_srvs/srv/Trigger '{}'
 ```
 
 ### Simulation and Visualization

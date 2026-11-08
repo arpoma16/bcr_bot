@@ -16,4 +16,3 @@ CATKIN_IGNORE
 .vscode/
 *.swp
 log/
-test/

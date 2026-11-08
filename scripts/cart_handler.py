@@ -14,7 +14,12 @@
          cart pose is measured from its legs in the scan (cart_legs.py) and the robot is corrected on the
          cart axis (spin + drive_on_heading + spin) until within lateral_tolerance /
          yaw_tolerance, checked again at pre_entry_distance; then drive_on_heading under the
-         cart and lift_up.
+         cart, lift_up, and reverse staging_distance on the entry axis.
+  place_cart (nav2_msgs/action/DockRobot)
+      dock_pose is the destination centre in map. With the lift raised, align at
+      staging, drive straight to the centre, lower, and reverse to staging.
+      Guarded translations temporarily lease the robot footprint from the carry
+      adapter and independently monitor the raw scan and odometry deviation.
   drop_cart (nav2_msgs/action/UndockRobot)
       lift_down, then backup by backout_distance to leave the cart where it is.
 
@@ -25,13 +30,14 @@ frame, already/not carrying, busy), FAILED_TO_STAGE (navigation), FAILED_TO_DETE
 action. While the cart is up, cart_carry_adapter.py adapts Nav2 (footprint, scan).
 """
 
+import json
 import math
 import threading
 import time
 
 import rclpy
 from builtin_interfaces.msg import Duration as DurationMsg
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PolygonStamped, PoseStamped
 from nav2_msgs.action import BackUp, DockRobot, DriveOnHeading, NavigateToPose, Spin, UndockRobot
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -42,10 +48,11 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
-from std_srvs.srv import Empty, Trigger
+from std_srvs.srv import Empty, SetBool, Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 import cart_legs
+import cart_geometry as geometry
 
 DOCK = DockRobot.Result
 DOCK_FB = DockRobot.Feedback
@@ -103,8 +110,35 @@ class CartHandler(Node):
         # Forced AMCL updates before looking for the legs (0 disables).
         self.localization_updates = p('localization_updates', 10).value
         self.localization_period = p('localization_period', 0.3).value   # [s] between updates
+        self.motion_frame = p('motion_frame', self.base_frame.rsplit('/', 1)[0] + '/odom'
+                              if '/' in self.base_frame else 'odom').value
+        self.straight_lateral_limit = p('straight_lateral_limit', 0.01).value
+        self.straight_yaw_limit = p('straight_yaw_limit', math.radians(1.)).value
+        self.straight_envelope = p('straight_envelope', 0.02).value
+        self.straight_lookahead = p('straight_lookahead', 0.75).value
+        self.straight_data_timeout = p('straight_data_timeout', 0.3).value
+        self.straight_footprint_padding = p('straight_footprint_padding', 0.05).value
+        self.place_tolerance_xy = p('place_tolerance_xy', 0.15).value
+        self.place_tolerance_yaw = p('place_tolerance_yaw', math.radians(3.)).value
+        self.place_staging_along_tolerance = p('place_staging_along_tolerance', 0.05).value
+        # Map-frame staging uncertainty is distinct from relative drift in odom.
+        self.place_staging_lateral_tolerance = p(
+            'place_staging_lateral_tolerance', max(0.03, self.straight_lateral_limit)).value
+        self.place_staging_compensation_limit = p('place_staging_compensation_limit', 0.10).value
+        for value in (self.place_tolerance_xy, self.place_tolerance_yaw,
+                      self.place_staging_along_tolerance, self.place_staging_lateral_tolerance,
+                      self.place_staging_compensation_limit):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError('placement tolerances must be finite and positive')
+        self._motion_fault = False
+        self._pending_goal = None
+        self._pending_result = None
+        self._footprints = {}
 
         self.lifted = False
+        self._lift_state_seen = False
+        self._lift_state_revision = 0
+        self._lift_lock = threading.Lock()
         self._scan = None              # (LaserScan, monotonic receive time)
         self._laser_offset = None
         self._busy = threading.Lock()
@@ -120,6 +154,13 @@ class CartHandler(Node):
         self.lift_up = self.create_client(Trigger, 'lift_up', callback_group=group)
         self.lift_down = self.create_client(Trigger, 'lift_down', callback_group=group)
         self.nomotion = self.create_client(Empty, 'request_nomotion_update', callback_group=group)
+        self.straight_footprint = self.create_client(SetBool, 'cart_straight_footprint',
+                                                    callback_group=group)
+        for costmap in ('local_costmap', 'global_costmap'):
+            self.create_subscription(
+                PolygonStamped, f'{costmap}/published_footprint',
+                lambda msg, name=costmap: self._footprint_cb(name, msg), 10,
+                callback_group=group)
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(Bool, 'lift_state', self._lift_state_cb, latched,
@@ -127,16 +168,69 @@ class CartHandler(Node):
         # Raw scan: the legs must be visible (scan_filtered hides them while carrying).
         self.create_subscription(LaserScan, 'scan', self._scan_cb, qos_profile_sensor_data,
                                  callback_group=group)
+        self.create_service(Trigger, '~/reset_fault', self._reset_fault, callback_group=group)
 
         for name, action_type, execute in (('pick_cart', DockRobot, self._pick),
+                                           ('place_cart', DockRobot, self._place),
                                            ('drop_cart', UndockRobot, self._drop)):
             ActionServer(self, action_type, name, execute_callback=execute,
                          goal_callback=self._goal_cb, cancel_callback=lambda _: CancelResponse.ACCEPT,
                          callback_group=group)
-        self.get_logger().info('pick_cart / drop_cart ready')
+        self.get_logger().info('pick_cart / place_cart / drop_cart ready')
 
     def _lift_state_cb(self, msg):
-        self.lifted = msg.data
+        with self._lift_lock:
+            if not self._lift_state_seen or self.lifted != msg.data:
+                self._lift_state_revision += 1
+            self.lifted = msg.data
+            self._lift_state_seen = True
+
+    def _motion_terminal(self):
+        if self._pending_goal is None:
+            return True
+        if not self._pending_goal.done():
+            return False
+        goal = self._pending_goal.result()
+        if not goal.accepted:
+            return True
+        if self._pending_result is None:
+            self._pending_result = goal.get_result_async()
+        return (self._pending_result.done()
+                and self._pending_result.result().status in (4, 5, 6))
+
+    def _reset_fault(self, _request, response):
+        response.success = False
+        if not self._busy.acquire(blocking=False):
+            response.message = 'cannot reset during a cart maneuver'
+            return response
+        try:
+            with self._lift_lock:
+                if not self._lift_state_seen:
+                    response.message = 'lift_state has not been received'
+                    return response
+                revision = self._lift_state_revision
+            if not self._motion_terminal():
+                response.message = 'motion termination is not confirmed'
+                return response
+            if not self.straight_footprint.wait_for_service(timeout_sec=self.server_timeout):
+                response.message = 'footprint service unavailable'
+                return response
+            # This confirms adapter lift state AND fresh normal footprints from both
+            # costmaps, releasing any outstanding lease before clearing the latch.
+            self._restore_footprint()
+            with self._lift_lock:
+                if revision != self._lift_state_revision:
+                    response.message = 'lift_state changed during reset; retry after stabilization'
+                    return response
+                self._motion_fault = False
+            response.success = True
+            response.message = 'fault cleared; lift_state and both normal footprints confirmed'
+            return response
+        except Exception as exc:
+            response.message = f'cannot confirm normal state: {exc}'
+            return response
+        finally:
+            self._busy.release()
 
     def _scan_cb(self, msg):
         self._scan = (msg, time.monotonic())
@@ -176,7 +270,7 @@ class CartHandler(Node):
 
     def _goal_cb(self, _goal):
         # One maneuver at a time (pick and drop share the robot).
-        return GoalResponse.REJECT if self._busy.locked() else GoalResponse.ACCEPT
+        return GoalResponse.REJECT if self._busy.locked() or self._motion_fault else GoalResponse.ACCEPT
 
     # ------------------------------------------------------------------ helpers
 
@@ -206,10 +300,12 @@ class CartHandler(Node):
         if not client.wait_for_server(timeout_sec=self.server_timeout):
             raise Failed(code, f'{what}: action server not available')
         send = client.send_goal_async(goal)
+        self._pending_goal, self._pending_result = send, None
         if not self._wait(send, handle, self.server_timeout) or not send.result().accepted:
             raise Failed(code, f'{what}: goal rejected')
         nav_handle = send.result()
         result = nav_handle.get_result_async()
+        self._pending_result = result
         if not self._wait(result, handle, timeout, on_cancel=nav_handle.cancel_goal_async):
             nav_handle.cancel_goal_async()
             raise Failed(code, f'{what}: timeout after {timeout:.0f} s')
@@ -265,9 +361,251 @@ class CartHandler(Node):
         self._run(self.drive, goal, handle, distance / self.approach_speed + 15.0,
                   DOCK.FAILED_TO_CONTROL, what)
 
+    # ------------------------------------------------------ guarded translations
+
+    def _footprint_cb(self, name, msg):
+        pts = msg.polygon.points
+        edges = sorted(math.hypot(a.x - b.x, a.y - b.y)
+                       for a, b in zip(pts, list(pts[1:]) + list(pts[:1])))
+        self._footprints[name] = (edges, time.monotonic())
+
+    def _fresh_stamp(self, stamp):
+        age = (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds / 1e9
+        return -0.05 <= age <= self.straight_data_timeout
+
+    def _motion_pose(self):
+        try:
+            tf = self.tf_buffer.lookup_transform(self.motion_frame, self.base_frame, Time())
+        except TransformException as exc:
+            raise Failed(DOCK.FAILED_TO_CONTROL, f'no motion TF: {exc}')
+        if not self._fresh_stamp(tf.header.stamp):
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'stale motion TF')
+        t = tf.transform.translation
+        return t.x, t.y, _yaw(tf.transform.rotation)
+
+    def _confirm_lift(self, expected, handle):
+        deadline = time.monotonic() + self.server_timeout
+        while self.lifted != expected:
+            if handle.is_cancel_requested:
+                raise Canceled()
+            if time.monotonic() > deadline:
+                raise Failed(DOCK.FAILED_TO_CONTROL, 'lift_state did not confirm the lift operation')
+            time.sleep(0.02)
+
+    def _lease_result(self, response, carrying):
+        if not response.success:
+            raise Failed(DOCK.FAILED_TO_CONTROL, f'footprint lease: {response.message}')
+        try:
+            data = json.loads(response.message)
+            values = (*data['cart_pose'], data['half_x'], data['half_y'],
+                      data['robot_half_x'], data['robot_half_y'])
+            if (len(data['cart_pose']) != 3 or not all(math.isfinite(v) for v in values)
+                    or min(values[3:]) <= 0 or data['carrying'] != carrying):
+                raise ValueError('invalid geometry or inconsistent lift_state')
+            return data
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Failed(DOCK.FAILED_TO_CONTROL, f'invalid footprint acknowledgment: {exc}')
+
+    def _restore_footprint(self):
+        """Do not relinquish a maneuver until full collision protection returns."""
+        started = time.monotonic()
+        future = self.straight_footprint.call_async(SetBool.Request(data=False))
+        while not future.done() and time.monotonic() - started <= self.straight_data_timeout:
+            time.sleep(0.02)
+        if not future.done():
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'footprint restoration acknowledgment timed out')
+        data = self._lease_result(future.result(), self.lifted)
+        hx, hy = data['half_x'], data['half_y']
+        expected = sorted([2 * (hx + self.straight_footprint_padding)] * 2
+                          + [2 * (hy + self.straight_footprint_padding)] * 2)
+        deadline = time.monotonic() + 3.
+        while True:
+            ready = True
+            for name in ('local_costmap', 'global_costmap'):
+                edges, received = self._footprints.get(name, ([], 0.))
+                if (received <= started or len(edges) != 4
+                        or any(abs(a - b) > .015 for a, b in zip(edges, expected))):
+                    ready = False
+            if ready:
+                return
+            if time.monotonic() >= deadline:
+                raise Failed(DOCK.FAILED_TO_CONTROL, 'costmaps did not restore the full footprint')
+            time.sleep(0.02)
+
+    def _straight(self, distance, axis_yaw, handle, carrying):
+        """Nav2 supplies velocity control; an independent guard owns cart clearance.
+
+        The footprint lease never authorizes rotation. All checks run before sending
+        a goal and at 50 Hz while waiting, including during goal acceptance.
+        """
+        speed = self.approach_speed if distance > 0 else self.backout_speed
+        if (not math.isfinite(distance) or distance == 0 or not 0 < speed <= 0.15
+                or not 0 < self.straight_data_timeout <= 0.3
+                or not 0 < self.straight_lateral_limit <= 0.01
+                or not 0 < self.straight_yaw_limit <= math.radians(1.)
+                or not 0 < self.straight_envelope <= 0.02
+                or not math.isfinite(self.straight_lookahead) or self.straight_lookahead < 0.75):
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid straight-motion safety parameters')
+        self._confirm_lift(carrying, handle)
+        if not self.straight_footprint.wait_for_service(timeout_sec=self.server_timeout):
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'footprint lease service unavailable')
+        send = nav_handle = nav_result = None
+        lease_start = time.monotonic()
+        lease_future = self.straight_footprint.call_async(SetBool.Request(data=True))
+        try:
+            if not self._wait(lease_future, handle, self.straight_data_timeout):
+                raise Failed(DOCK.FAILED_TO_CONTROL, 'footprint lease acknowledgment timed out')
+            data = self._lease_result(lease_future.result(), carrying)
+            lease_ok = time.monotonic()
+            lease_future = None
+            map_pose, origin = self._robot_pose(), self._motion_pose()
+            axis = (origin[0], origin[1], origin[2] + _wrap(axis_yaw - map_pose[2]))
+            # Measure corner excursion of the actual cart, including its offset from
+            # the robot, rather than assuming the robot lifted it at its centre.
+            cart_at_start = data['cart_pose']
+            initial_yaw = geometry.local_pose(origin, axis)[2]
+            ox, oy, cart_yaw = cart_at_start
+            initial_lateral = ox * math.sin(initial_yaw) + oy * math.cos(initial_yaw)
+            expected_edges = sorted([2 * (data['robot_half_x'] + self.straight_footprint_padding)] * 2
+                                    + [2 * (data['robot_half_y'] + self.straight_footprint_padding)] * 2)
+
+            def refresh():
+                nonlocal lease_ok, lease_future
+                now = time.monotonic()
+                if lease_future is not None and lease_future.done():
+                    if self._lease_result(lease_future.result(), carrying) != data:
+                        raise Failed(DOCK.FAILED_TO_CONTROL, 'cart geometry changed during translation')
+                    lease_ok = now
+                    lease_future = None
+                if now - lease_ok > self.straight_data_timeout:
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'footprint lease lost')
+                if lease_future is None and now - lease_ok >= 0.1:
+                    lease_future = self.straight_footprint.call_async(SetBool.Request(data=True))
+
+            def footprints_ready():
+                for name in ('local_costmap', 'global_costmap'):
+                    edges, received = self._footprints.get(name, ([], 0.))
+                    if (received <= lease_start or time.monotonic() - received > 2.5
+                            or len(edges) != 4
+                            or any(abs(a - b) > 0.015 for a, b in zip(edges, expected_edges))):
+                        return False
+                return True
+
+            def guard(check_footprint=True):
+                if handle.is_cancel_requested:
+                    raise Canceled()
+                refresh()
+                if self.lifted != carrying:
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'lift state changed during translation')
+                pose = self._motion_pose()
+                # The cart centre traces an offset line if not perfectly centred.
+                relative = geometry.local_pose(pose, axis)
+                yaw = relative[2]
+                cart_error = (relative[0], relative[1] + ox * math.sin(yaw)
+                              + oy * math.cos(yaw) - initial_lateral, _wrap(yaw + cart_yaw))
+                if not geometry.deviation_ok(cart_error, (0., 0., 0.),
+                                              self.straight_lateral_limit, self.straight_yaw_limit,
+                                              data['half_x'], data['half_y'], self.straight_envelope):
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion lateral/yaw deviation')
+                if (self._scan is None or time.monotonic() - self._scan[1] > self.straight_data_timeout
+                        or not self._fresh_stamp(self._scan[0].header.stamp)):
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'no fresh raw scan for straight motion')
+                scan = self._scan[0]
+                if (not scan.ranges or scan.angle_increment <= 0
+                        or len(scan.ranges) * scan.angle_increment < 2 * math.pi - 0.05
+                        or any(math.isnan(r) or r < scan.range_min for r in scan.ranges)):
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid scan or incomplete angular coverage')
+                try:
+                    tf = self.tf_buffer.lookup_transform(self.base_frame, scan.header.frame_id, Time())
+                except TransformException as exc:
+                    raise Failed(DOCK.FAILED_TO_CONTROL, f'no laser TF for straight motion: {exc}')
+                points = cart_legs.scan_points(scan, cart_legs.laser_offset_from_tf(tf))
+                if geometry.motion_sweep_blocked(points, cart_at_start, data['half_x'], data['half_y'],
+                                                  1 if distance > 0 else -1, self.straight_lookahead):
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'obstacle in straight-motion leading sweep')
+                if check_footprint and not footprints_ready():
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'robot footprint acknowledgment lost')
+
+            # Costmaps acknowledge the actual footprint, not merely service receipt.
+            deadline = time.monotonic() + 3.
+            while not footprints_ready():
+                guard(check_footprint=False)
+                if time.monotonic() > deadline:
+                    raise Failed(DOCK.FAILED_TO_CONTROL, 'costmaps did not acknowledge robot footprint')
+                time.sleep(0.02)
+            guard()
+            client = self.drive if distance > 0 else self.backup
+            if not client.wait_for_server(timeout_sec=self.server_timeout):
+                raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion action server unavailable')
+            guard()
+            timeout = abs(distance) / speed + 15.
+            goal_type = DriveOnHeading if distance > 0 else BackUp
+            goal = goal_type.Goal(speed=float(speed), time_allowance=_duration_msg(timeout - 5.))
+            goal.target.x = float(distance)
+            send = client.send_goal_async(goal)
+            self._pending_goal, self._pending_result = send, None
+
+            def monitored_wait(future, timeout):
+                deadline = time.monotonic() + timeout
+                while not future.done():
+                    guard()
+                    if time.monotonic() > deadline:
+                        raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion action timed out')
+                    time.sleep(0.02)
+                guard()
+
+            monitored_wait(send, self.server_timeout)
+            nav_handle = send.result()
+            if not nav_handle.accepted:
+                raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion goal rejected')
+            nav_result = nav_handle.get_result_async()
+            self._pending_result = nav_result
+            monitored_wait(nav_result, timeout)
+            outcome = nav_result.result()
+            if outcome.status != 4:
+                raise Failed(DOCK.FAILED_TO_CONTROL,
+                             f'straight motion failed (status {outcome.status}, '
+                             f'error_code {getattr(outcome.result, "error_code", "?")})')
+            along, _, _ = geometry.local_pose(self._motion_pose(), axis)
+            if abs(along - distance) > 0.03:
+                raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion endpoint outside 3 cm tolerance')
+        except Exception as exc:
+            if nav_handle is None and send is not None:
+                if send.done():
+                    nav_handle = send.result()
+                else:
+                    # Retain cancellation even when acceptance arrives after failure.
+                    send.add_done_callback(lambda f: f.result().cancel_goal_async()
+                                           if f.result().accepted else None)
+                    self._motion_fault = True
+            if nav_handle is not None and nav_handle.accepted:
+                nav_handle.cancel_goal_async()
+                terminal = nav_result or nav_handle.get_result_async()
+                deadline = time.monotonic() + 2.
+                while not terminal.done() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                if not terminal.done():
+                    self._motion_fault = True
+                    self.get_logger().error('motion stop unconfirmed; rejecting further cart goals')
+            if isinstance(exc, (Failed, Canceled)):
+                raise
+            raise Failed(DOCK.FAILED_TO_CONTROL, f'straight-motion guard failed: {exc}') from exc
+        finally:
+            try:
+                self._restore_footprint()
+            except Exception as exc:
+                self._motion_fault = True
+                raise Failed(DOCK.FAILED_TO_CONTROL, f'footprint restoration unconfirmed: {exc}') from exc
+
     # --------------------------------------------------------------- pick_cart
 
     def _pick(self, handle):
+        return self._dock_action(handle, self._do_pick, 'pick_cart')
+
+    def _place(self, handle):
+        return self._dock_action(handle, self._do_place, 'place_cart')
+
+    def _dock_action(self, handle, execute, name):
         result = DockRobot.Result(success=False)
         with self._busy:
             t0 = time.monotonic()
@@ -276,20 +614,20 @@ class CartHandler(Node):
                 handle.publish_feedback(DOCK_FB(state=state,
                                                 docking_time=_duration_msg(time.monotonic() - t0)))
             try:
-                self._do_pick(handle.request, handle, feedback)
+                execute(handle.request, handle, feedback)
             except Canceled:
                 result.error_msg = 'canceled'
                 handle.canceled()
-                self.get_logger().warn('pick_cart canceled')
+                self.get_logger().warn(f'{name} canceled')
                 return result
             except Failed as exc:
                 result.error_code, result.error_msg = exc.code, str(exc)
                 handle.abort()
-                self.get_logger().error(f'pick_cart failed: {exc}')
+                self.get_logger().error(f'{name} failed: {exc}')
                 return result
             result.success = True
             handle.succeed()
-            self.get_logger().info(f'pick_cart done in {time.monotonic() - t0:.1f} s')
+            self.get_logger().info(f'{name} done in {time.monotonic() - t0:.1f} s')
             return result
 
     def _do_pick(self, req, handle, feedback):
@@ -312,8 +650,8 @@ class CartHandler(Node):
             staging = PoseStamped()
             staging.header.frame_id = self.global_frame
             staging.header.stamp = self.get_clock().now().to_msg()
-            staging.pose.position.x = cx - self.staging_distance * ux
-            staging.pose.position.y = cy - self.staging_distance * uy
+            staging.pose.position.x, staging.pose.position.y, _ = geometry.staging_pose(
+                (cx, cy, cyaw), self.staging_distance)
             staging.pose.orientation = req.dock_pose.pose.orientation
             self._run(self.nav, NavigateToPose.Goal(pose=staging), handle,
                       float(req.max_staging_time), DOCK.FAILED_TO_STAGE, 'navigate to staging pose')
@@ -382,6 +720,79 @@ class CartHandler(Node):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'robot is already past the cart centre')
         self._drive(distance, handle, 'drive under the cart')
         self._call(self.lift_up, handle, DOCK.FAILED_TO_CONTROL, 'lift_up')
+        self._confirm_lift(True, handle)
+        self._straight(-self.staging_distance, cyaw, handle, True)
+
+    # -------------------------------------------------------------- place_cart
+
+    def _place_target(self, cart, handle):
+        if not self.straight_footprint.wait_for_service(timeout_sec=self.server_timeout):
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'cart geometry service unavailable')
+        future = self.straight_footprint.call_async(SetBool.Request(data=False))
+        if not self._wait(future, handle, self.straight_data_timeout):
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'cart geometry acknowledgment timed out')
+        data = self._lease_result(future.result(), True)
+        local = data['cart_pose']
+        if (not data.get('measured') or abs(local[2]) > math.radians(.5)
+                or math.hypot(local[0], local[1]) > .25):
+            raise Failed(DOCK.DOCK_NOT_VALID, 'place requires a measured cart within 25 cm / 0.5 deg of robot')
+        target = geometry.placement_robot_pose(cart, local)
+        nominal = geometry.staging_pose(cart, self.staging_distance)
+        corrected = geometry.staging_pose(target, self.staging_distance)
+        if (math.hypot(corrected[0] - nominal[0], corrected[1] - nominal[1])
+                > self.place_staging_compensation_limit):
+            raise Failed(DOCK.DOCK_NOT_VALID, 'cart offset exceeds staging compensation limit')
+        self._placement_geometry = local
+        return target
+
+    def _verify_placement(self, cart):
+        actual = geometry.compose(self._robot_pose(), self._placement_geometry)
+        if (math.hypot(actual[0] - cart[0], actual[1] - cart[1]) > self.place_tolerance_xy
+                or abs(_wrap(actual[2] - cart[2])) > self.place_tolerance_yaw):
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'cart outside destination tolerance; refusing to lower')
+
+    def _align_place(self, cart, handle):
+        staging = geometry.staging_pose(cart, self.staging_distance)
+        # Small staging corrections retain the full cart footprint. Never use the
+        # leased footprint to rotate, or drive a lateral correction inside a station.
+        for _ in range(3):
+            rx, ry, _ = self._robot_pose()
+            pose = geometry.local_pose((rx, ry, cart[2]), staging)
+            distance = math.hypot(pose[0], pose[1])
+            if distance > 0.5:
+                raise Failed(DOCK.FAILED_TO_STAGE, 'place_cart must start within 0.5 m of staging')
+            if (abs(pose[0]) <= self.place_staging_along_tolerance
+                    and abs(pose[1]) <= self.place_staging_lateral_tolerance):
+                break
+            self._spin_to(math.atan2(staging[1] - ry, staging[0] - rx), handle)
+            self._drive(distance, handle, 'align at destination staging')
+        self._spin_to(cart[2], handle)
+        pose = geometry.local_pose(self._robot_pose(), staging)
+        if (abs(pose[0]) > self.place_staging_along_tolerance
+                or abs(pose[1]) > self.place_staging_lateral_tolerance):
+            raise Failed(DOCK.FAILED_TO_STAGE, 'place_cart alignment left the staging position')
+
+    def _do_place(self, req, handle, feedback):
+        if not self.lifted:
+            raise Failed(DOCK.DOCK_NOT_VALID, 'not carrying a cart (lift is down)')
+        if req.use_dock_id:
+            raise Failed(DOCK.DOCK_NOT_IN_DB, 'no cart database: give dock_pose')
+        if req.dock_pose.header.frame_id != self.global_frame:
+            raise Failed(DOCK.DOCK_NOT_VALID, f'dock_pose must be in "{self.global_frame}"')
+        pose = req.dock_pose.pose
+        cart = pose.position.x, pose.position.y, _yaw(pose.orientation)
+        q = pose.orientation
+        if (not all(math.isfinite(v) for v in (*cart, q.x, q.y, q.z, q.w))
+                or abs(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w - 1.) > 0.01):
+            raise Failed(DOCK.DOCK_NOT_VALID, 'dock_pose must contain a finite pose and unit quaternion')
+        feedback(DOCK_FB.CONTROLLING)
+        target = self._place_target(cart, handle)
+        self._align_place(target, handle)
+        self._straight(self.staging_distance, target[2], handle, True)
+        self._verify_placement(cart)
+        self._call(self.lift_down, handle, DOCK.FAILED_TO_CONTROL, 'lift_down')
+        self._confirm_lift(False, handle)
+        self._straight(-self.staging_distance, target[2], handle, False)
 
     # --------------------------------------------------------------- drop_cart
 

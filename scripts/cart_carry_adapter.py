@@ -16,7 +16,9 @@ scan (cart_legs.py) and the filter box and the footprint are placed there. If th
 not found, the cart is assumed centred.
 """
 
+import json
 import math
+import time
 
 import rclpy
 from geometry_msgs.msg import Point32, Polygon
@@ -26,6 +28,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
+from std_srvs.srv import SetBool
 from tf2_ros import Buffer, TransformException, TransformListener
 
 import cart_legs
@@ -50,10 +53,15 @@ class CartCarryAdapter(Node):
         self.leg_model = cart_legs.leg_model(p('leg_x', 0.58).value, p('leg_y', 0.48).value)
         self.leg_search_radius = p('leg_search_radius', 0.2).value
         self.republish_period = p('footprint_republish_period', 2.0).value
+        # Only the handler's guarded translations may borrow the robot footprint.
+        self.straight_lease_timeout = p('straight_lease_timeout', 0.6).value
+        self._straight_until = 0.0
+        self._cart_measured = False
 
         self.carrying = False
         self.cart_pose = (0.0, 0.0, 0.0)   # cart in base_frame while carrying
         self._last_raw_scan = None
+        self._last_raw_received = 0.0
         self._laser_offset = {}            # frame_id -> (x, y, yaw) of the laser in base_frame
 
         self.tf_buffer = Buffer()
@@ -69,12 +77,15 @@ class CartCarryAdapter(Node):
         self.create_subscription(Bool, 'lift_state', self._lift_state_cb, latched)
         # Costmaps that start (or restart) after a change would miss it: repeat while carrying.
         self.create_timer(self.republish_period, self._republish)
+        self.create_service(SetBool, 'cart_straight_footprint', self._straight_footprint)
+        self.create_timer(0.1, self._expire_straight)
 
     # --------------------------------------------------------------- footprint
 
     def _lift_state_cb(self, msg):
         if msg.data == self.carrying:
             return
+        self._straight_until = 0.0
         if msg.data:
             self.cart_pose = self._measure_cart()
         self.carrying = msg.data
@@ -88,7 +99,8 @@ class CartCarryAdapter(Node):
             self.get_logger().info('not carrying: robot footprint, scan unfiltered')
 
     def _measure_cart(self):
-        if self._last_raw_scan is None:
+        self._cart_measured = False
+        if self._last_raw_scan is None or time.monotonic() - self._last_raw_received > 0.3:
             self.get_logger().warn('no scan to locate the cart: assuming it is centred')
             return (0.0, 0.0, 0.0)
         offset = self._offset(self._last_raw_scan.header.frame_id)
@@ -100,10 +112,38 @@ class CartCarryAdapter(Node):
         if found is None:
             self.get_logger().warn(f'cart legs not found ({legs} of 4): assuming it is centred')
             return (0.0, 0.0, 0.0)
+        self._cart_measured = True
         return found
 
+    def _straight_footprint(self, request, response):
+        if not request.data:
+            self._straight_until = 0.0
+        elif self.carrying and not self._cart_measured:
+            response.success = False
+            response.message = 'cannot guard a cart whose pose was not measured'
+            return response
+        else:
+            self._straight_until = time.monotonic() + self.straight_lease_timeout
+        self._publish_footprint()
+        response.success = True
+        response.message = json.dumps({'carrying': self.carrying,
+                                       'measured': self._cart_measured,
+                                       'cart_pose': self.cart_pose if self.carrying else [0., 0., 0.],
+                                       'half_x': max(x for x, _ in (
+                                           self.cart_footprint if self.carrying else self.robot_footprint)),
+                                       'half_y': max(y for _, y in (
+                                           self.cart_footprint if self.carrying else self.robot_footprint)),
+                                       'robot_half_x': max(x for x, _ in self.robot_footprint),
+                                       'robot_half_y': max(y for _, y in self.robot_footprint)})
+        return response
+
+    def _expire_straight(self):
+        if self._straight_until and time.monotonic() >= self._straight_until:
+            self._straight_until = 0.0
+            self._publish_footprint()
+
     def _publish_footprint(self):
-        if self.carrying:
+        if self.carrying and time.monotonic() >= self._straight_until:
             points = [cart_legs.transform(self.cart_pose, pt) for pt in self.cart_footprint]
         else:
             points = self.robot_footprint
@@ -133,6 +173,7 @@ class CartCarryAdapter(Node):
     def _scan_cb(self, scan):
         if not self.carrying:
             self._last_raw_scan = scan
+            self._last_raw_received = time.monotonic()
             self.scan_pub.publish(scan)
             return
         offset = self._offset(scan.header.frame_id)

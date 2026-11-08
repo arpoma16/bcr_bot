@@ -18,6 +18,7 @@ install(PROGRAMS
         scripts/cart_carry_adapter.py
         scripts/cart_handler.py
         scripts/cart_legs.py
+        scripts/cart_geometry.py
         DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

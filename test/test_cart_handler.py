@@ -1,0 +1,53 @@
+from types import SimpleNamespace as NS
+from unittest.mock import Mock
+
+
+def test_place_sequence(handler_module):
+    module = handler_module
+    node = object.__new__(module.CartHandler)
+    node.lifted = True
+    node.global_frame = 'map'
+    node.staging_distance = 1.8
+    node.lift_down = object()
+    calls = []
+    node._align_place = Mock(side_effect=lambda *args: calls.append('align'))
+    node._straight = Mock(side_effect=lambda distance, *args: calls.append(distance))
+    node._call = Mock(side_effect=lambda *args: calls.append('lower'))
+    node._confirm_lift = Mock()
+    node._place_target = lambda cart, handle: cart
+    node._verify_placement = Mock()
+    pose = NS(position=NS(x=1.8, y=0.0), orientation=NS(x=0., y=0., z=0., w=1.))
+    req = NS(use_dock_id=False, dock_pose=NS(header=NS(frame_id='map'), pose=pose))
+    node._do_place(req, NS(is_cancel_requested=False), Mock())
+    assert calls == ['align', 1.8, 'lower', -1.8]
+    node._confirm_lift.assert_called_once()
+
+
+def test_place_requires_cart(handler_module):
+    module = handler_module
+    node = object.__new__(module.CartHandler)
+    node.lifted = False
+    import pytest
+    with pytest.raises(module.Failed) as error:
+        node._do_place(NS(), NS(), Mock())
+    assert error.value.code == module.DOCK.DOCK_NOT_VALID
+
+
+def test_drop_still_lowers_here_and_backs_out(handler_module):
+    import threading
+    module = handler_module
+    node = object.__new__(module.CartHandler)
+    node._busy = threading.Lock()
+    node.lifted = True
+    node.lift_down, node.backup = object(), object()
+    node.backout_distance, node.backout_speed = 1.3, .15
+    calls = []
+    node._call = Mock(side_effect=lambda *args: calls.append('lower'))
+    node._run = Mock(side_effect=lambda client, goal, *args: calls.append(goal.target.x))
+    node.get_logger = lambda: NS(info=Mock(), warn=Mock(), error=Mock())
+    handle = NS(request=NS(max_undocking_time=40.), succeed=Mock())
+    result = node._drop(handle)
+    assert result.success
+    assert calls == ['lower', -1.3]
+    assert node._run.call_args.args[3] == 40.
+    handle.succeed.assert_called_once()
