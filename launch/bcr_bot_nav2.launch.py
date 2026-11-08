@@ -62,8 +62,9 @@ def launch_setup(context, *args, **kwargs):
         ]),
     ]
 
-    # Feeds scan_filtered to AMCL/costmaps/collision_monitor and swaps the footprint while
-    # a cart is lifted (follows lift_state from the spawn's lift_controller).
+    # Feeds scan_filtered to AMCL/costmaps/collision_monitor and follows lift_state.
+    # Owns the normal cart footprint and expiring robot-footprint lease used only
+    # by guarded straight translations; cart scan filtering stays active while leased.
     actions.append(Node(
         package="bcr_bot",
         executable="cart_carry_adapter.py",
@@ -73,7 +74,11 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{"use_sim_time": _is_true(use_sim_time), "base_frame": f"{ns}/base_link"}],
     ))
 
-    # pick_cart / drop_cart actions (nav2_msgs DockRobot / UndockRobot) over Nav2 + the lift.
+    # pick_cart / place_cart use DockRobot; drop_cart uses UndockRobot.
+    # Pick reverses to staging after lifting; place enters, lowers, and reverses to staging.
+    # The handler guards raw scan + odom during leased straight segments and provides
+    # ~/reset_fault (Trigger). Placement/straight tolerances default in cart_handler.py;
+    # this launch passes only simulation time and the namespaced base frame.
     actions.append(Node(
         package="bcr_bot",
         executable="cart_handler.py",

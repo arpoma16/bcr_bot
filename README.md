@@ -215,6 +215,7 @@ gz `JointPositionController` (force PID). Everything below lives inside the robo
 | `pick_cart` | `nav2_msgs/action/DockRobot`: `dock_pose` = cart centre in `map`, `use_dock_id: false` | `bcr_bot_nav2.launch.py` (`scripts/cart_handler.py`) |
 | `place_cart` | `nav2_msgs/action/DockRobot`: destination centre/orientation in `dock_pose`, `use_dock_id: false` | same |
 | `drop_cart` | `nav2_msgs/action/UndockRobot` | same |
+| `cart_handler/reset_fault` | `std_srvs/Trigger`: clear a motion fault after normal-state confirmation | same |
 
 `pick_cart` navigates to a staging pose, measures the cart from its four legs in the laser scan (`scripts/cart_legs.py`),
 aligns on the cart axis, drives under it, lifts it, and reverses `staging_distance` (default 1.8 m)
@@ -222,13 +223,15 @@ on the entry axis. Set `navigate_to_staging_pose: false` when RMF already brough
 Pickup alignment uses `lateral_tolerance` (default 0.04 m predicted lateral error)
 and `yaw_tolerance` (default 0.0523599 rad, 3 degrees), without tighter internal caps.
 `place_cart` requires a raised lift and a start within 0.5 m of the destination staging pose
-(`centre - 1.8 * [cos(yaw), sin(yaw)]`). It corrects alignment at staging with the full cart
-footprint, advances 1.8 m, lowers, and reverses 1.8 m to staging. It does not navigate to the
+(`centre - staging_distance * [cos(yaw), sin(yaw)]`, default distance 1.8 m).
+It corrects alignment at staging with the full cart footprint, advances `staging_distance`,
+lowers, and reverses the same distance to staging. It does not navigate to the
 station centre with NavigateToPose; `navigate_to_staging_pose` and `max_staging_time` are unused
 for this action. `drop_cart` keeps its existing behavior: lower where it is and reverse
 `backout_distance` (default 1.3 m), using UndockRobot's `max_undocking_time`.
 Placement compensates the measured cart offset when computing the robot target and staging.
-It refuses an unmeasured cart, cart yaw relative to the robot over 0.5 degrees, or a correction
+It refuses an unmeasured cart, a measured offset over 0.25 m, cart yaw relative to the robot
+over 0.5 degrees, or a correction
 that exceeds `place_staging_compensation_limit` (default 0.10 m). Before lowering, the
 estimated cart centre must satisfy `place_tolerance_xy` (default 0.15 m) and
 `place_tolerance_yaw` (default 0.0523599 rad, 3 degrees). This map-frame check allows
@@ -249,7 +252,8 @@ accounts for map-frame arrival/localization uncertainty independently of `straig
 (still 0.01 m by default), which limits relative drift during translation in odom.
 
 While a cart is up, `scripts/cart_carry_adapter.py` removes the
-legs from the scan (`scan_filtered`, read by AMCL, the costmaps and the collision monitor) and switches the costmap
+returns inside the cart filter box from the scan, including its legs (`scan_filtered`, read by
+AMCL, the costmaps and the collision monitor), and switches the costmap
 footprint to the cart's. The cart model (deck underside 0.375 m, 1.12 x 0.92 m between legs) is
 `models/lift_cart` in the `indra` package; design notes and measurements in `indra/docs/LIFT_CARTS.md`.
 
@@ -292,6 +296,16 @@ default requiring measured braking/cancellation validation. Endpoint map clearan
 does not guarantee the corridor is clear. Validate the tight-station maneuver in the isolated
 simulation before using these changes on hardware.
 
+Live validation still required for the complete sequence introduced in `bcc5014`:
+pickup including the loaded reverse to staging, `place_cart` entry/lowering/exit, and
+transport from `recogida_propulsion_2` to `entrega_avionica_1` in the isolated simulation.
+Measure stopping distance and obstacle-response/cancellation latency in both directions;
+verify lease loss, full-footprint restoration, and `reset_fault` against live costmaps.
+Confirm lidar coverage with the cart present, actual cart centre/heading at placement,
+and whether localization and the remaining cart-relative yaw/odom guards permit the full
+sequence in tight stations. These runtime and hardware properties are not established by
+the offline checks below.
+
 ```bash
 ros2 service call /bcr_bot_1/lift_up std_srvs/srv/Trigger
 ros2 action send_goal /bcr_bot_1/pick_cart nav2_msgs/action/DockRobot \
@@ -301,6 +315,19 @@ ros2 action send_goal /bcr_bot_1/place_cart nav2_msgs/action/DockRobot \
   "{use_dock_id: false, dock_pose: {header: {frame_id: map}, pose: {position: {x: 15.0, y: -28.0}, orientation: {z: -0.7071068, w: 0.7071068}}}}"
 ros2 service call /bcr_bot_1/cart_handler/reset_fault std_srvs/srv/Trigger '{}'
 ```
+
+Run the offline tests from the `bcr_bot` repository root with Python 3 and pytest available:
+
+```bash
+python3 -B -m pytest -q -p no:cacheprovider test/
+```
+
+The suite imports the ROS-free `scripts/cart_geometry.py` and uses mocked ROS messages,
+services, action clients and costmap acknowledgments for orchestration tests. It needs
+no ROS graph, sourced ROS installation, package build, container, or simulator. It covers
+staging/sweep geometry, drift rejection, pick/place/drop sequencing, placement tolerances,
+footprint lease/restoration failures and fault reset. Passing it does not verify real sensor
+visibility, braking, or delivery of ROS messages and velocity commands.
 
 ### Simulation and Visualization
 1. Gz Sim (Ignition Gazebo) (small_warehouse World):

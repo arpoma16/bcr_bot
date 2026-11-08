@@ -4,9 +4,13 @@
 #   <robot_name>       TF frames, replaced by bcr_bot_nav2.launch.py with "<ns>"  (e.g. bcr_bot/odom)
 # Relative topics (cmd_vel, local_costmap/...) resolve inside the namespace on their own.
 # Laser consumers (AMCL, costmaps, collision_monitor) read scan_filtered from
-# scripts/cart_carry_adapter.py: the raw scan, minus the cart legs while the lift is up.
-# The same node swaps the costmap footprint to the cart's while carrying; leg cells left
-# from before the lift are removed by footprint clearing (enabled by default).
+# scripts/cart_carry_adapter.py: returns inside the cart filter box are removed while lifted.
+# The same node normally uses the cart footprint while carrying. Guarded straight segments
+# temporarily lease the robot footprint; cart_handler independently checks raw scan + odom.
+# Nav2 and the collision monitor follow published_footprint, including this temporary change.
+# Leg cells left from before the lift are removed by footprint clearing (enabled by default).
+# Cart-handler tolerances and adapter lease defaults live in their Python node declarations;
+# they are separate from the Nav2 planner/controller parameters below (see README.md).
 amcl:
   ros__parameters:
     use_sim_time: True
