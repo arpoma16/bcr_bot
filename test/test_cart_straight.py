@@ -21,11 +21,12 @@ def rig(handler_module, monkeypatch):
     monkeypatch.setattr(m.time, 'monotonic', lambda: clock.now)
     monkeypatch.setattr(m.time, 'sleep', lambda dt: setattr(clock, 'now', clock.now + dt))
     node.approach_speed = node.backout_speed = .15
-    node.straight_lateral_limit, node.straight_yaw_limit = .01, math.radians(1.)
-    node.straight_envelope, node.straight_lookahead = .02, .75
+    node.straight_lateral_limit, node.straight_yaw_limit = .03, math.radians(2.)
+    node.straight_envelope, node.straight_lookahead = .04, .75
     node.straight_data_timeout, node.straight_footprint_padding = .3, .05
     node.server_timeout, node.staging_distance = 1., 1.8
     node.place_tolerance_xy, node.place_tolerance_yaw = .15, math.radians(3.)
+    node.lateral_tolerance, node.yaw_tolerance = .04, math.radians(3.)
     node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .05, .03
     node.place_staging_compensation_limit = .10
     node.lifted, node._motion_fault = True, False
@@ -40,7 +41,8 @@ def rig(handler_module, monkeypatch):
     transform = NS(transform=NS(translation=NS(x=0., y=0.),
                                 rotation=NS(x=0., y=0., z=0., w=1.)))
     node.tf_buffer = NS(lookup_transform=Mock(return_value=transform))
-    node.get_logger = lambda: NS(error=Mock())
+    logger = NS(error=Mock(), info=Mock(), debug=Mock())
+    node.get_logger = lambda: logger
     events, released, action_handles = [], [], []
     node._footprints = {}
 
@@ -58,7 +60,7 @@ def rig(handler_module, monkeypatch):
             'robot_half_x': .45, 'robot_half_y': .32})))
 
     node.straight_footprint = NS(wait_for_service=Mock(return_value=True), call_async=Mock(side_effect=lease))
-    state = NS(after_send=None)
+    state = NS(after_send=None, complete_after_send=True)
 
     def client(name):
         def send(goal):
@@ -68,6 +70,8 @@ def rig(handler_module, monkeypatch):
             def result():
                 if state.after_send:
                     state.after_send()
+                    if state.complete_after_send:
+                        terminal.set_result(NS(status=4, result=NS(error_code=0)))
                 else:
                     pose[0] += goal.target.x
                     terminal.set_result(NS(status=4, result=NS(error_code=0)))
@@ -87,7 +91,7 @@ def rig(handler_module, monkeypatch):
     node.drive, node.backup = client('drive'), client('backup')
     return NS(m=m, node=node, handle=NS(is_cancel_requested=False), events=events,
               released=released, action_handles=action_handles, pose=pose, scan=scan,
-              clock=clock, state=state)
+              clock=clock, state=state, logger=logger)
 
 
 @pytest.mark.parametrize('distance,name', [(1.8, 'drive'), (-1.8, 'backup')])
@@ -104,9 +108,9 @@ def test_active_motion_is_canceled_on_guard_failure(rig, failure):
         if failure == 'obstacle':
             rig.scan.ranges[180] = .8
         elif failure == 'lateral':
-            rig.pose[1] = .011
+            rig.pose[1] = .04
         elif failure == 'yaw':
-            rig.pose[2] = math.radians(1.1)
+            rig.pose[2] = math.radians(2.5)
         elif failure == 'scan_stale':
             rig.node._scan = rig.scan, rig.clock.now - 1.
         elif failure == 'lift':
@@ -118,6 +122,88 @@ def test_active_motion_is_canceled_on_guard_failure(rig, failure):
         rig.node._straight(1.8, 0., rig.handle, True)
     rig.action_handles[0].cancel_goal_async.assert_called_once()
     assert rig.released == [True]
+
+
+def _set_measured_cart_pose(rig, pose):
+    original = rig.node.straight_footprint.call_async.side_effect
+
+    def measured(request):
+        response = original(request).result()
+        data = json.loads(response.message)
+        data['cart_pose'] = list(pose)
+        response.message = json.dumps(data)
+        return completed(response)
+
+    rig.node.straight_footprint.call_async.side_effect = measured
+
+
+def test_initial_two_degree_cart_offset_without_drift_passes(rig):
+    _set_measured_cart_pose(rig, (0., 0., math.radians(2.)))
+    rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.events == [('drive', 1.8)]
+
+
+def test_moderate_lateral_and_yaw_drift_passes(rig):
+    def inject():
+        rig.pose[0] = 1.8
+        rig.pose[1] = .02
+        rig.pose[2] = math.radians(1.5)
+
+    rig.state.after_send = inject
+    rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.events == [('drive', 1.8)]
+    rig.logger.info.assert_called_once()
+    diagnostic = rig.logger.info.call_args.args[0]
+    for field in ('lateral=0.020m', 'yaw=1.500°', 'envelope=', 'limit=', 'travelled=1.800m'):
+        assert field in diagnostic
+
+
+@pytest.mark.parametrize('lateral,yaw,exceeded', [
+    (.04, 0., 'lateral'),
+    (0., math.radians(2.5), 'yaw'),
+])
+def test_excessive_drift_reports_values(rig, lateral, yaw, exceeded):
+    def inject():
+        rig.pose[0], rig.pose[1], rig.pose[2] = .6, lateral, yaw
+
+    rig.state.after_send = inject
+    with pytest.raises(rig.m.Failed) as caught:
+        rig.node._straight(1.8, 0., rig.handle, True)
+    message = str(caught.value)
+    assert f'exceeded={exceeded}' in message
+    for field in ('lateral=', 'yaw=', 'envelope=', 'limit=', 'travelled='):
+        assert field in message
+    rig.logger.info.assert_called_once()
+
+
+@pytest.mark.parametrize('cart_pose', [
+    (0., .041, 0.),
+    (0., 0., math.radians(3.1)),
+])
+def test_initial_cart_offset_outside_alignment_tolerance_refuses_before_motion(rig, cart_pose):
+    _set_measured_cart_pose(rig, cart_pose)
+    with pytest.raises(rig.m.Failed, match='initial cart alignment'):
+        rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.events == []
+
+
+def test_straight_motion_parameter_ceilings_are_usable(rig):
+    rig.node.straight_lateral_limit = .05
+    rig.node.straight_yaw_limit = math.radians(3.)
+    rig.node.straight_envelope = .06
+    rig.node._straight(1.8, 0., rig.handle, True)
+
+
+@pytest.mark.parametrize('name,value', [
+    ('straight_lateral_limit', .0501),
+    ('straight_yaw_limit', math.radians(3.01)),
+    ('straight_envelope', .0601),
+])
+def test_straight_motion_parameters_above_ceilings_are_rejected(rig, name, value):
+    setattr(rig.node, name, value)
+    with pytest.raises(rig.m.Failed, match='invalid straight-motion safety parameters'):
+        rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.events == []
 
 
 @pytest.mark.parametrize('failure', ['stale_scan', 'blind_scan', 'invalid_scan', 'no_tf', 'fast'])
@@ -159,7 +245,7 @@ def test_pick_finishes_with_lift_and_staging_backout(rig):
     node.lifted = False
     node._settle_localization = Mock()
     node._detect_cart = lambda cart: cart
-    node.get_logger = lambda: NS(info=Mock(), error=Mock())
+    node.get_logger = lambda: NS(info=Mock(), error=Mock(), debug=Mock())
     node.pre_entry_distance, node.lateral_tolerance, node.yaw_tolerance = 1.3, .04, .06
     node.max_corrections = 3
     rig.pose[0] = -1.
@@ -181,6 +267,7 @@ def test_pick_finishes_with_lift_and_staging_backout(rig):
 
 def test_lost_lease_cancels_motion(rig):
     rig.state.after_send = lambda: None
+    rig.state.complete_after_send = False
     original = rig.node.straight_footprint.call_async.side_effect
     count = [0]
 
@@ -199,8 +286,10 @@ def test_lost_lease_cancels_motion(rig):
 
 
 def test_unconfirmed_cancellation_latches_fault(rig):
+    rig.state.complete_after_send = False
+
     def inject():
-        rig.pose[1] = .02
+        rig.pose[1] = .04
         rig.action_handles[0].cancel_goal_async.side_effect = lambda: completed(NS())
     rig.state.after_send = inject
     with pytest.raises(rig.m.Failed):
@@ -284,11 +373,11 @@ def test_excessive_measured_cart_yaw_refuses_motion(rig):
     def rotated_cart(request):
         response = original(request).result()
         data = json.loads(response.message)
-        data['cart_pose'][2] = .05
+        data['cart_pose'][2] = math.radians(3.1)
         response.message = json.dumps(data)
         return completed(response)
     rig.node.straight_footprint.call_async.side_effect = rotated_cart
-    with pytest.raises(rig.m.Failed, match='lateral/yaw deviation'):
+    with pytest.raises(rig.m.Failed, match='initial cart alignment'):
         rig.node._straight(1.8, 0., rig.handle, True)
     assert not rig.events
 

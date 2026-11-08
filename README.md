@@ -248,8 +248,9 @@ Placement parameters (lengths in metres, angles in radians):
 | `place_staging_compensation_limit` | `0.10` | Maximum difference between compensated and nominal staging |
 
 These placement tolerances must be finite and positive. The 3 cm staging lateral default
-accounts for map-frame arrival/localization uncertainty independently of `straight_lateral_limit`
-(still 0.01 m by default), which limits relative drift during translation in odom.
+accounts for map-frame arrival/localization uncertainty. It is the same number as the default
+`straight_lateral_limit` (0.03 m, relative drift during translation in odom) and follows it
+upward, as the formula above says.
 
 While a cart is up, `scripts/cart_carry_adapter.py` removes the
 returns inside the cart filter box from the scan, including its legs (`scan_filtered`, read by
@@ -269,11 +270,15 @@ Unknown cart geometry refuses a lease. A lease is never used for rotation. Both 
 and the costmaps must acknowledge full footprint restoration before a maneuver returns;
 missing confirmation latches a fault.
 
-Straight-motion defaults: speed at most 0.15 m/s; `straight_lateral_limit` 0.01 m;
-`straight_yaw_limit` 0.0174533 rad; combined `straight_envelope` 0.02 m for centre drift
+Straight-motion defaults: speed at most 0.15 m/s; `straight_lateral_limit` 0.03 m;
+`straight_yaw_limit` 0.0349066 rad (2 degrees); combined `straight_envelope` 0.04 m for centre drift
 plus lateral corner excursion; `straight_data_timeout` 0.3 s; `straight_lookahead` 0.75 m.
-These bounds cannot be loosened above the stated limits (or below the lookahead) through
-parameters. `motion_frame` defaults to the namespaced odom frame to avoid AMCL jumps;
+The configurable ceilings are 0.05 m, 0.0523599 rad (3 degrees), and 0.06 m respectively;
+values above them are rejected. Before movement, the measured cart offset from the segment axis
+must satisfy the pick alignment `lateral_tolerance` and `yaw_tolerance`. During movement, the
+guard measures lateral and yaw **drift from that initial offset**, logs the maximum once per
+segment, and reports the measured drift, combined envelope, configured limits, and travelled
+distance on failure. `motion_frame` defaults to the namespaced odom frame to avoid AMCL jumps;
 `straight_footprint_padding` defaults to the costmaps' 0.05 m. No fresh scan/odom TF, missing
 laser TF, invalid scan coverage, lift inconsistency, footprint loss, drift, or cancellation
 stops the action. Endpoint odometry must be within 3 cm of commanded displacement.

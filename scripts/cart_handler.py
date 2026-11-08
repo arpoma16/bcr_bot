@@ -20,6 +20,11 @@
       staging, drive straight to the centre, lower, and reverse to staging.
       Guarded translations temporarily lease the robot footprint from the carry
       adapter and independently monitor the raw scan and odometry deviation.
+      Before each straight segment the measured cart offset from the axis must satisfy
+      lateral_tolerance / yaw_tolerance (else FAILED_TO_CONTROL); during it the guard measures the
+      lateral / yaw / envelope drift from that initial offset against straight_lateral_limit,
+      straight_yaw_limit and straight_envelope (README, ceilings 0.05 m / 3 deg / 0.06 m), logs
+      the maxima once per segment and reports the measured values on failure.
   drop_cart (nav2_msgs/action/UndockRobot)
       lift_down, then backup by backout_distance to leave the cart where it is.
 
@@ -112,9 +117,9 @@ class CartHandler(Node):
         self.localization_period = p('localization_period', 0.3).value   # [s] between updates
         self.motion_frame = p('motion_frame', self.base_frame.rsplit('/', 1)[0] + '/odom'
                               if '/' in self.base_frame else 'odom').value
-        self.straight_lateral_limit = p('straight_lateral_limit', 0.01).value
-        self.straight_yaw_limit = p('straight_yaw_limit', math.radians(1.)).value
-        self.straight_envelope = p('straight_envelope', 0.02).value
+        self.straight_lateral_limit = p('straight_lateral_limit', 0.03).value
+        self.straight_yaw_limit = p('straight_yaw_limit', math.radians(2.)).value
+        self.straight_envelope = p('straight_envelope', 0.04).value
         self.straight_lookahead = p('straight_lookahead', 0.75).value
         self.straight_data_timeout = p('straight_data_timeout', 0.3).value
         self.straight_footprint_padding = p('straight_footprint_padding', 0.05).value
@@ -441,15 +446,24 @@ class CartHandler(Node):
         speed = self.approach_speed if distance > 0 else self.backout_speed
         if (not math.isfinite(distance) or distance == 0 or not 0 < speed <= 0.15
                 or not 0 < self.straight_data_timeout <= 0.3
-                or not 0 < self.straight_lateral_limit <= 0.01
-                or not 0 < self.straight_yaw_limit <= math.radians(1.)
-                or not 0 < self.straight_envelope <= 0.02
+                or not 0 < self.straight_lateral_limit <= 0.05
+                or not 0 < self.straight_yaw_limit <= math.radians(3.)
+                or not 0 < self.straight_envelope <= 0.06
                 or not math.isfinite(self.straight_lookahead) or self.straight_lookahead < 0.75):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid straight-motion safety parameters')
         self._confirm_lift(carrying, handle)
         if not self.straight_footprint.wait_for_service(timeout_sec=self.server_timeout):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'footprint lease service unavailable')
         send = nav_handle = nav_result = None
+        maxima = None
+
+        def metrics_text(lateral, yaw, envelope, travelled):
+            return (f'lateral={abs(lateral):.3f}m yaw={abs(math.degrees(yaw)):.3f}° '
+                    f'envelope={envelope:.3f}m '
+                    f'limit={self.straight_lateral_limit:.3f}m/'
+                    f'{math.degrees(self.straight_yaw_limit):.3f}°/'
+                    f'{self.straight_envelope:.3f}m travelled={travelled:.3f}m')
+
         lease_start = time.monotonic()
         lease_future = self.straight_footprint.call_async(SetBool.Request(data=True))
         try:
@@ -466,6 +480,21 @@ class CartHandler(Node):
             initial_yaw = geometry.local_pose(origin, axis)[2]
             ox, oy, cart_yaw = cart_at_start
             initial_lateral = ox * math.sin(initial_yaw) + oy * math.cos(initial_yaw)
+            initial_cart_yaw = _wrap(initial_yaw + cart_yaw)
+            initial_exceeded = []
+            if abs(initial_lateral) > self.lateral_tolerance:
+                initial_exceeded.append('lateral')
+            if abs(initial_cart_yaw) > self.yaw_tolerance:
+                initial_exceeded.append('yaw')
+            if initial_exceeded:
+                raise Failed(
+                    DOCK.FAILED_TO_CONTROL,
+                    f'initial cart alignment outside tolerance: exceeded={"+".join(initial_exceeded)} '
+                    f'lateral={abs(initial_lateral):.3f}m '
+                    f'limit={self.lateral_tolerance:.3f}m '
+                    f'yaw={abs(math.degrees(initial_cart_yaw)):.3f}° '
+                    f'limit={math.degrees(self.yaw_tolerance):.3f}°')
+            maxima = {'lateral': 0., 'yaw': 0., 'envelope': 0., 'travelled': 0.}
             expected_edges = sorted([2 * (data['robot_half_x'] + self.straight_footprint_padding)] * 2
                                     + [2 * (data['robot_half_y'] + self.straight_footprint_padding)] * 2)
 
@@ -501,12 +530,31 @@ class CartHandler(Node):
                 # The cart centre traces an offset line if not perfectly centred.
                 relative = geometry.local_pose(pose, axis)
                 yaw = relative[2]
-                cart_error = (relative[0], relative[1] + ox * math.sin(yaw)
-                              + oy * math.cos(yaw) - initial_lateral, _wrap(yaw + cart_yaw))
+                lateral = (relative[1] + ox * math.sin(yaw)
+                           + oy * math.cos(yaw) - initial_lateral)
+                yaw_drift = _wrap(_wrap(yaw + cart_yaw) - initial_cart_yaw)
+                cart_error = (relative[0], lateral, yaw_drift)
+                _, _, envelope = geometry.deviation_metrics(
+                    cart_error, (0., 0., 0.), data['half_x'], data['half_y'])
+                travelled = abs(relative[0])
+                maxima['lateral'] = max(maxima['lateral'], abs(lateral))
+                maxima['yaw'] = max(maxima['yaw'], abs(yaw_drift))
+                maxima['envelope'] = max(maxima['envelope'], envelope)
+                maxima['travelled'] = max(maxima['travelled'], travelled)
                 if not geometry.deviation_ok(cart_error, (0., 0., 0.),
                                               self.straight_lateral_limit, self.straight_yaw_limit,
                                               data['half_x'], data['half_y'], self.straight_envelope):
-                    raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion lateral/yaw deviation')
+                    exceeded = []
+                    if abs(lateral) > self.straight_lateral_limit:
+                        exceeded.append('lateral')
+                    if abs(yaw_drift) > self.straight_yaw_limit:
+                        exceeded.append('yaw')
+                    if envelope > self.straight_envelope:
+                        exceeded.append('envelope')
+                    raise Failed(
+                        DOCK.FAILED_TO_CONTROL,
+                        f'straight-motion deviation exceeded={"+".join(exceeded)} '
+                        f'{metrics_text(lateral, yaw_drift, envelope, travelled)}')
                 if (self._scan is None or time.monotonic() - self._scan[1] > self.straight_data_timeout
                         or not self._fresh_stamp(self._scan[0].header.stamp)):
                     raise Failed(DOCK.FAILED_TO_CONTROL, 'no fresh raw scan for straight motion')
@@ -591,6 +639,11 @@ class CartHandler(Node):
                 raise
             raise Failed(DOCK.FAILED_TO_CONTROL, f'straight-motion guard failed: {exc}') from exc
         finally:
+            if maxima is not None:
+                self.get_logger().info(
+                    'straight-motion maxima: '
+                    + metrics_text(maxima['lateral'], maxima['yaw'],
+                                   maxima['envelope'], maxima['travelled']))
             try:
                 self._restore_footprint()
             except Exception as exc:

@@ -72,12 +72,12 @@ def test_staging_map_tolerances_do_not_change_odom_drift(handler_module, offset)
     node = object.__new__(m.CartHandler)
     node.staging_distance = 1.8
     node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .05, .03
-    node.straight_lateral_limit = .01
+    node.straight_lateral_limit = .03
     node._robot_pose = lambda: (offset[0], offset[1], 0.)
     node._spin_to, node._drive = Mock(), Mock()
     node._align_place((1.8, 0., 0.), NS())
     node._drive.assert_not_called()
-    assert node.straight_lateral_limit == .01
+    assert node.straight_lateral_limit == .03
 
 
 @pytest.mark.parametrize('error,accepted', [(math.radians(2.), True), (math.radians(4.), False)])

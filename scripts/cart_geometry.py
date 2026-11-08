@@ -73,10 +73,16 @@ def motion_sweep_blocked(points, cart_in_base, half_x, half_y, direction, lookah
     return False
 
 
-def deviation_ok(pose, axis, lateral_limit, yaw_limit, half_x, half_y, envelope):
-    """Bound centre error and additional lateral corner excursion together."""
+def deviation_metrics(pose, axis, half_x, half_y):
+    """Return lateral, yaw and cart-corner excursion relative to an axis."""
     _, lateral, yaw = local_pose(pose, axis)
     excursion = abs(lateral) + half_x * abs(math.sin(yaw)) + half_y * (math.cos(yaw) - 1.)
+    return lateral, yaw, excursion
+
+
+def deviation_ok(pose, axis, lateral_limit, yaw_limit, half_x, half_y, envelope):
+    """Bound centre error and additional lateral corner excursion together."""
+    lateral, yaw, excursion = deviation_metrics(pose, axis, half_x, half_y)
     return (all(math.isfinite(v) for v in (*pose, *axis))
             and abs(lateral) <= lateral_limit and abs(yaw) <= yaw_limit
             and excursion <= envelope)
