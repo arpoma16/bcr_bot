@@ -61,6 +61,8 @@
     <xacro:arg name="wheel_odom_topic" default="odom" />
     <xacro:arg name="camera_enabled" default="false" />
     <xacro:arg name="stereo_camera_enabled" default="false" />
+    <!-- Camara RGB frontal 640x480 (sustituye al estereo; se sirve con web_video_server) -->
+    <xacro:arg name="front_camera_enabled" default="false" />
     <xacro:arg name="two_d_lidar_enabled" default="false" />
     <xacro:arg name="publish_wheel_odom_tf" default="true" />
     <xacro:arg name="conveyor_enabled" default="false"/>
@@ -68,7 +70,7 @@
     <xacro:arg name="sim_gz" default="false" />
     <xacro:arg name="sim_mujoco" default="false" />
     <!-- Dibujar los rayos del lidar en la GUI de Gazebo (upstream usa false; mas barato con varios robots) -->
-    <xacro:arg name="lidar_visualize" default="true" />
+    <xacro:arg name="lidar_visualize" default="false" />
     <xacro:arg name="odometry_source" default="world" />
 
     <xacro:property name="odometry_source" value="$(arg odometry_source)"/>
@@ -280,6 +282,50 @@
             <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
             <parent link="${prefix}stereo_camera"/>
             <child link="${prefix}stereo_camera_optical"/>
+        </joint>
+
+    </xacro:if>
+
+    <!-- ............................. FRONT CAMERA (RGB) ........................................ -->
+
+    <xacro:if value="$(arg front_camera_enabled)">
+
+        <link name="${prefix}front_camera">
+
+            <collision>
+                <origin xyz="0 0 0" rpy="0 0 0" />
+                <geometry>
+                    <box size="0.07 0.3 0.09"/>
+                </geometry>
+            </collision>
+
+            <visual>
+                <origin xyz="0 0 0" rpy="0 0 0" />
+                <geometry>
+                    <mesh filename="file://$(find bcr_bot)/meshes/kinect/d415.dae"/>
+                </geometry>
+                <material name="black"/>
+            </visual>
+
+            <inertial>
+                <mass value="0.01"/>
+                <xacro:box_inertia m="0.01" x="0.07" y="0.3" z = "0.09"/>
+            </inertial>
+
+        </link>
+
+        <joint name="${prefix}front_camera_joint" type="fixed">
+            <origin rpy="0 0 0" xyz="${chassis_length/2} 0 ${chassis_height/7}"/>
+            <parent link="${prefix}base_link"/>
+            <child link="${prefix}front_camera"/>
+        </joint>
+
+        <link name="${prefix}front_camera_optical"/>
+
+        <joint name="${prefix}front_camera_optical_joint" type="fixed">
+            <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+            <parent link="${prefix}front_camera"/>
+            <child link="${prefix}front_camera_optical"/>
         </joint>
 
     </xacro:if>

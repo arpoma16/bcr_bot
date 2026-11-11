@@ -21,8 +21,8 @@ from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDesc
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 
-from launch_ros.actions import ComposableNodeContainer, Node
-from launch_ros.descriptions import ComposableNode, ParameterValue
+from launch_ros.actions import Node
+from launch_ros.descriptions import ParameterValue
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -50,8 +50,10 @@ def _bridge_entries(ns, name):
         ("tf", "tf2_msgs/msg/TFMessage[gz.msgs.Pose_V", f"/{ns}/tf" if ns else "/tf"),
         ("scan", "sensor_msgs/msg/LaserScan[gz.msgs.LaserScan", None),
         ("kinect_camera", "sensor_msgs/msg/Image[gz.msgs.Image", None),
-        ("stereo_camera/left/image_raw", "sensor_msgs/msg/Image[gz.msgs.Image", None),
-        ("stereo_camera/right/image_raw", "sensor_msgs/msg/Image[gz.msgs.Image", None),
+        # Estereo desactivado (sustituido por front_camera); descomentar junto con stereo_camera_enabled.
+        # ("stereo_camera/left/image_raw", "sensor_msgs/msg/Image[gz.msgs.Image", None),
+        # ("stereo_camera/right/image_raw", "sensor_msgs/msg/Image[gz.msgs.Image", None),
+        ("front_camera/image_raw", "sensor_msgs/msg/Image[gz.msgs.Image", None),
     ]
     if ns:
         # Historical bridge kept for the namespaced flavour.
@@ -59,8 +61,9 @@ def _bridge_entries(ns, name):
                         ros + "kinect_camera/camera_info"))
     entries += [
         ("kinect_camera/camera_info", "sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo", None),
-        ("stereo_camera/left/camera_info", "sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo", None),
-        ("stereo_camera/right/camera_info", "sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo", None),
+        # ("stereo_camera/left/camera_info", "sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo", None),
+        # ("stereo_camera/right/camera_info", "sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo", None),
+        ("front_camera/camera_info", "sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo", None),
         ("kinect_camera/points", "sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked", None),
         ("imu", "sensor_msgs/msg/Imu[gz.msgs.IMU", None),
     ]
@@ -89,7 +92,6 @@ def launch_setup(context, *args, **kwargs):
     name = ns or DEFAULT_NAME
     position_x, position_y, orientation_yaw = cfg("position_x"), cfg("position_y"), cfg("orientation_yaw")
     launch_nav2 = _is_true(cfg("launch_nav2"))
-    stereo_resize = _is_true(cfg("stereo_resize"))
     tf_relay = bool(ns)
 
     if launch_nav2 and not ns:
@@ -99,6 +101,7 @@ def launch_setup(context, *args, **kwargs):
     xacro_cmd = ["xacro ", join(bcr_bot_path, "urdf", "bcr_bot.xacro"),
                  " camera_enabled:=", cfg("camera_enabled"),
                  " stereo_camera_enabled:=", cfg("stereo_camera_enabled"),
+                 " front_camera_enabled:=", cfg("front_camera_enabled"),
                  " two_d_lidar_enabled:=", cfg("two_d_lidar_enabled"),
                  " odometry_source:=", cfg("odometry_source"),
                  " sim_gz:=true"]
@@ -158,48 +161,8 @@ def launch_setup(context, *args, **kwargs):
 
     actions = [robot_state_publisher, gz_spawn_entity, gz_ros2_bridge, lift_controller]
 
-    # Stereo: optionally resize before compressing (lighter for the web/HMI).
-    stereo_src = "image_resized" if stereo_resize else "image_raw"
-
-    if stereo_resize:
-        def resize_node(side):
-            return ComposableNode(
-                package="image_proc",
-                plugin="image_proc::ResizeNode",
-                name=f"stereo_{side}_resize",
-                namespace=name,
-                remappings=[
-                    ("image/image_raw", f"stereo_camera/{side}/image_raw"),
-                    ("image/camera_info", f"stereo_camera/{side}/camera_info"),
-                    ("resize/image_raw", f"stereo_camera/{side}/image_resized"),
-                    ("resize/camera_info", f"stereo_camera/{side}/image_resized/camera_info"),
-                ],
-                parameters=[{"use_sim_time": True, "use_scale": False, "width": 640, "height": 640}],
-            )
-
-        actions.append(ComposableNodeContainer(
-            name="stereo_resize_container",
-            namespace=name,
-            package="rclcpp_components",
-            executable="component_container",
-            composable_node_descriptions=[resize_node("left"), resize_node("right")],
-            output="screen",
-            parameters=[{"use_sim_time": True}],
-        ))
-
-    for side in ("left", "right"):
-        actions.append(Node(
-            package="image_transport",
-            executable="republish",
-            name=f"stereo_{side}_compressed_republisher",
-            namespace=name,
-            arguments=["raw", "compressed"],
-            remappings=[
-                ("in", f"/{name}/stereo_camera/{side}/{stereo_src}"),
-                ("out/compressed", f"/{name}/stereo_camera/{side}/image_raw/compressed"),
-            ],
-            parameters=[{"use_sim_time": True}],
-        ))
+    # The camera is not compressed here: web_video_server subscribes to
+    # /<name>/front_camera/image_raw and encodes MJPEG only while a client is watching.
 
     if tf_relay:
         # Copy the robot's namespaced TF to the global topics so Nav2 and RViz see it.
@@ -245,6 +208,8 @@ def generate_launch_description():
                               description="Enable the kinect depth camera"),
         DeclareLaunchArgument("stereo_camera_enabled", default_value="False",
                               description="Enable the stereo camera"),
+        DeclareLaunchArgument("front_camera_enabled", default_value="False",
+                              description="Enable the front RGB camera (640x480)"),
         DeclareLaunchArgument("two_d_lidar_enabled", default_value="True",
                               description="Enable the 2D lidar"),
         DeclareLaunchArgument("position_x", default_value="0.0", description="Spawn x [m]"),
@@ -258,7 +223,5 @@ def generate_launch_description():
                               description="Map yaml for Nav2 (empty: bcr_bot_nav2.launch.py default)."),
         DeclareLaunchArgument("nav2_params_file", default_value="",
                               description="Nav2 params file (empty: bcr_bot_nav2.launch.py default)."),
-        DeclareLaunchArgument("stereo_resize", default_value="False",
-                              description="Resize stereo images to 640x640 before compressing."),
         OpaqueFunction(function=launch_setup),
     ])
