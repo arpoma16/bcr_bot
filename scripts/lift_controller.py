@@ -31,7 +31,7 @@ class LiftController(Node):
     def __init__(self):
         super().__init__('lift_controller')
         self.joint_name = self.declare_parameter('joint_name', 'lift_joint').value
-        self.up_height = float(self.declare_parameter('up_height', 0.08).value)
+        self.up_height = float(self.declare_parameter('up_height', 0.10).value)
         self.speed = float(self.declare_parameter('speed', 0.05).value)
         self.rate_hz = float(self.declare_parameter('rate', 50.0).value)
         self.tolerance = float(self.declare_parameter('tolerance', 0.003).value)
@@ -92,8 +92,13 @@ class LiftController(Node):
         finally:
             self._motion.release()
             self._publish_state()
-        level = self.get_logger().info if response.success else self.get_logger().warn
-        level(f'lift_{label}: {response.message}')
+        # Two call sites: rclpy raises ValueError if ONE call site logs with different severities
+        # (a failed lift followed by a good one used to kill the service callback, so the client
+        # never got a response).
+        if response.success:
+            self.get_logger().info(f'lift_{label}: {response.message}')
+        else:
+            self.get_logger().warn(f'lift_{label}: {response.message}')
         return response
 
     def _ramp_to(self, target, label):

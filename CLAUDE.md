@@ -11,7 +11,7 @@ El README mezcla instrucciones de upstream (Gazebo, MuJoCo, Isaac Sim) con la se
 
 | Área | Archivos | Estado |
 |---|---|---|
-| Robot unificado con `robot_namespace` | `urdf/bcr_bot.xacro`, `urdf/gz.xacro`, `urdf/macros.xacro` | Fork. Plataforma lift Kiva en `lift_joint` (prismática, 0 a 0.08 m, PID de fuerza) |
+| Robot unificado con `robot_namespace` | `urdf/bcr_bot.xacro`, `urdf/gz.xacro`, `urdf/macros.xacro` | Fork. Plataforma lift Kiva en `lift_joint` (prismática, 0 a 0.10 m, PID de fuerza) |
 | Spawn en Gazebo | `launch/bcr_bot_gz_spawn.launch.py` | Fork. `robot_namespace`, `launch_nav2`, `stereo_resize`, `nav2_map`, `nav2_params_file` |
 | Nav2 con namespace | `launch/bcr_bot_nav2.launch.py`, `config/nav2_factory_params.yaml` | Fork. Nav2 corre dentro de `/<robot_namespace>` (exige namespace no vacío) |
 | Wrapper de fábrica | `launch/nav2_factory.launch.py` | Fork. Envoltorio fino sobre `bcr_bot_nav2.launch.py` (mapa `factory_map_2.yaml`, pose de spawn) |

@@ -18,7 +18,7 @@ El modelo del carro y las estaciones siguen en el paquete `indra`: ver [`indra/d
 
 | Capa | Archivo | Qué hace |
 |---|---|---|
-| Robot (URDF) | `urdf/bcr_bot.xacro`, `meshes/bcr_bot_{body,top}.dae` | El mesh se partió en cuerpo y bloque superior (faldón + tapa). La tapa es `lift_link`, con un joint prismático `lift_joint` de 0 a 0,08 m |
+| Robot (URDF) | `urdf/bcr_bot.xacro`, `meshes/bcr_bot_{body,top}.dae` | El mesh se partió en cuerpo y bloque superior (faldón + tapa). La tapa es `lift_link`, con un joint prismático `lift_joint` de 0 a 0,10 m |
 | Robot (Gazebo) | `urdf/gz.xacro` | `JointPositionController` (PID de fuerza) en `<ns>/lift_cmd`. Tapa con fricción alta (`lift_friction` 1000) |
 | Robot (driver) | `scripts/lift_controller.py` | Servicios `lift_up` / `lift_down` (rampa a 0,05 m/s) y `lift_state` |
 | Nav2 | `scripts/cart_carry_adapter.py`, `scripts/cart_legs.py` | Con la tapa arriba: filtra las patas del scan (`scan_filtered`), cambia la huella a la del carro y concede el lease de huella de los tramos rectos |
@@ -113,8 +113,18 @@ Las mediciones siguientes siguen vigentes (contrastadas con el código el 2026-1
 - **Lift en Gazebo/DART:**
   - `use_velocity_commands` no movía el joint.
   - Un damping alto en el joint (20000) más la fricción del contacto se comían la fuerza: solo levantaba ~6 kg.
-  - Solución: damping 500 (`lift_damping`) y `d_gain` 3000 en el PID.
-  - El PID es rígido (8 cm en 0,25 s); la rampa la pone `lift_controller`.
+  - Solución: damping 500 (`lift_damping`) y un `d_gain` alto en el PID.
+  - El PID es rígido (el recorrido entero en ~0,25 s); la rampa la pone `lift_controller`.
+- **`d_gain` y el paso de física (2026-11-12):** con `d_gain=3000` la plataforma funcionaba con un paso de 1 ms, pero con el
+  paso de 4 ms de `factory*.sdf` se quedaba ~1,3 cm por debajo de la consigna (`lift_up` fallaba por timeout con tolerancia de 3 mm)
+  y temblaba (banda de 2,8 mm). Es independiente del mundo y de la carga. Un plato de 2 kg con paso de 4 ms necesita
+  `d_gain × paso / masa` por debajo de ~1, es decir `d_gain` ≲ 500. Con `d_gain=200` (`lift_d_gain` en `bcr_bot.xacro`, junto a
+  `lift_p_gain`, `lift_i_gain` y `lift_i_max`, que son argumentos del xacro) la plataforma sigue la consigna con error ≤0,1 mm y se
+  asienta en 0,1–0,2 s. Barrido en aislado (mundo vacío, 4 ms): `d` 500, 200, y `p`/`i` de 20000 y 10000 con `d` 300 y 150 dieron lo mismo.
+  Sin integral queda un error fijo de 0,8 mm.
+- **`lift_controller` y el log:** el mensaje final usaba una sola llamada con severidad `info` o `warn` según el resultado; rclpy
+  lanza `ValueError` si una misma línea cambia de severidad, y el callback del servicio moría sin responder (un `lift_up` fallido
+  seguido de un `lift_down` correcto dejaba el cliente esperando). Ahora son dos llamadas.
 
 ## Verificado (histórico, 2026-11-04)
 
@@ -128,6 +138,18 @@ Las mediciones siguientes siguen vigentes (contrastadas con el código el 2026-1
 | `pick_cart` donde no hay carro | 904, "0 of 4 legs" |
 | Segundo goal en curso / cancelar | rechazado / CANCELED con el robot detenido |
 | Caja de 20 kg sobre la tapa; carro con avance y giro de 96° (banco aislado) | sube sin hundirse; el carro sigue al robot sin deslizarse |
+
+**Recorrido de 10 cm y PID nuevo (2026-11-12)**, banco aislado (mundo vacío, paso 4 ms, un robot parado con `lift_cart` encima,
+`d_gain=200`), sin `pick_cart` ni Nav2:
+
+| Prueba | Resultado |
+|---|---|
+| `lift_up` | éxito en 2,2 s; plataforma a 0,0993 m, sin temblor |
+| Carro levantado | z = 0,0732 m (teórico 7,4 cm); 10 s después igual, sin deslizar |
+| `lift_down` | éxito en 2,4 s; plataforma a 0,0000 m (banda 0,1 mm); carro de vuelta en z = 0 |
+| Dos `lift_up` a la vez | uno con éxito, el otro `lift busy`; el nodo sigue vivo |
+
+Con un `p` más bajo (20000, 10000) no se ha probado el carro real. Tampoco `pick_cart`/`drop_cart` con el recorrido de 10 cm.
 
 Después de esa fecha, con el carro levantado y en estaciones justas, se observó que Nav2 no puede volver al staging (RMF→Nav2 devolvió status 6 cuatro veces y un `BackUp` de 1,6 m dio 714); en una estación de 4 cm `pick_cart` sí funcionó (`lince_manager/fase3/activo/unified-client-control.md`, L4/R2). De ahí salieron los tramos rectos.
 

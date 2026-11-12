@@ -204,7 +204,7 @@ ros2 launch bcr_bot nav2.launch.py map:="$(ros2 pkg prefix --share bcr_bot)/conf
 
 ### Lift platform and carts (this fork, Gz Sim)
 
-The black top block of the robot is a Kiva-style lift (`lift_joint`, prismatic, 0 to 0.08 m), driven by the
+The black top block of the robot is a Kiva-style lift (`lift_joint`, prismatic, 0 to 0.10 m), driven by the
 gz `JointPositionController` (force PID). Everything below lives inside the robot namespace `/<ns>`:
 
 | Interface | Type | Started by |
