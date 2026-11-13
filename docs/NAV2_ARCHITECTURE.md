@@ -57,10 +57,13 @@ La salida de `collision_monitor` a `/<ns>/cmd_vel` y su entrada `cmd_vel_smoothe
 - **Entradas:** `scan_filtered`, `/map`, TF `odom → base_footprint`, `initialpose`.
 - **Salidas:** TF `map → odom` (`tf_broadcast: true`); además `amcl_pose` y nube de partículas (comportamiento estándar de AMCL).
 - **Función:** localiza el robot en el mapa con un filtro de partículas.
-  `laser_model_type: likelihood_field`, `max_beams: 60`, 500–2000 partículas, `DifferentialMotionModel`,
-  actualiza al moverse `update_min_d: 0.25` m o `update_min_a: 0.2` rad.
+  `laser_model_type: likelihood_field`, `max_beams: 60`, 250–1000 partículas, `DifferentialMotionModel`,
+  actualiza al moverse `update_min_d: 0.05` m o `update_min_a: 0.05` rad (en `nav2_factory_params.yaml`; antes 0.25 m / 0.2 rad,
+  con lo que tras frenar el estimado podía quedar 17–19 cm / hasta 8° rezagado respecto a Gazebo). Sigue sin actualizar con el robot quieto:
+  `cart_handler` pide actualizaciones sin movimiento (`localization_updates`) antes de medir.
 - **Pose inicial:** `set_initial_pose.py` la envía al arrancar (`set_initial_pose:=True`, `initial_pose_delay` 10 s).
-- **Riesgo conocido:** el error medido llega a 0.18 m / 0.6°, y la tolerancia de colocación del carro es 0.15 m (ver `../CLAUDE.md`).
+- **Riesgo conocido:** con los umbrales antiguos el error medido llegaba a 0.18 m / 0.6° y la tolerancia de colocación del carro es 0.15 m (ver `../CLAUDE.md`).
+  Con `update_min_*` en 0.05 y el `settle` previo, el estimado se mueve 1–4 cm al asentarse en las pruebas R4 (P1 y P2); no se ha repetido la medición completa contra Gazebo.
 - **Quién la consume:** nadie recibe un mensaje directo. Todo lo que trabaja en frame `map` depende de la TF `map → odom`.
 
 ### 2.4 `bt_navigator`
