@@ -74,10 +74,64 @@ def test_staging_map_tolerances_do_not_change_odom_drift(handler_module, offset)
     node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .05, .03
     node.straight_lateral_limit = .03
     node._robot_pose = lambda: (offset[0], offset[1], 0.)
-    node._spin_to, node._drive = Mock(), Mock()
+    node._spin_to, node._drive, node._settle_localization = Mock(), Mock(), Mock()
+    node.get_logger = lambda: NS(info=Mock())
     node._align_place((1.8, 0., 0.), NS())
     node._drive.assert_not_called()
     assert node.straight_lateral_limit == .03
+
+
+def test_staging_alignment_settles_localization_before_measuring_and_after_the_spin(handler_module):
+    m = handler_module
+    node = object.__new__(m.CartHandler)
+    node.staging_distance = 1.8
+    node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .05, .03
+    order = []
+    node._settle_localization = Mock(side_effect=lambda handle: order.append('settle'))
+    node._spin_to = Mock(side_effect=lambda yaw, handle: order.append('spin'))
+    node._drive = Mock(side_effect=lambda *a: order.append('drive'))
+    node._robot_pose = lambda: (order.append('measure'), (.01, .01, 0.))[1]
+    node.get_logger = lambda: NS(info=Mock())
+    node._align_place((1.8, 0., 0.), NS())
+    # Settle first (AMCL lags after Nav2 stops), measure, final spin, settle again (the spin moves
+    # AMCL's estimate), and only then the final measurement the staging check uses.
+    assert order == ['settle', 'measure', 'spin', 'settle', 'measure']
+
+
+def test_failed_staging_alignment_reports_the_measured_error(handler_module):
+    m = handler_module
+    node = object.__new__(m.CartHandler)
+    node.staging_distance = 1.8
+    node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .05, .03
+    # Cart at (1.8, 0) -> staging at (0, 0). The robot never gets closer: 8 cm along, 6 cm lateral.
+    node._robot_pose = lambda: (.08, -.06, 0.)
+    node._spin_to, node._drive, node._settle_localization = Mock(), Mock(), Mock()
+    logger = NS(info=Mock())
+    node.get_logger = lambda: logger
+    with pytest.raises(m.Failed) as caught:
+        node._align_place((1.8, 0., 0.), NS())
+    message = str(caught.value)
+    assert 'left the staging position' in message
+    assert 'along' in message and 'lateral' in message and 'limits 0.050 m along / 0.030 m lateral' in message
+    assert logger.info.call_count == m.CartHandler.PLACE_ALIGN_ROUNDS
+
+
+def test_staging_alignment_corrects_again_when_the_final_spin_shifts_the_pose(handler_module):
+    m = handler_module
+    node = object.__new__(m.CartHandler)
+    node.staging_distance = 1.8
+    node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .05, .03
+    # Cart at (1.8, 0) -> staging (0, 0). Measured OK facing the staging point, but the final
+    # spin leaves the robot 6 cm off laterally (the P2 failure); the second round corrects it.
+    poses = iter([(.0, -.01, 0.), (.0, .06, 0.), (.0, .0, 0.), (.0, .0, 0.)])
+    node._robot_pose = lambda: next(poses)
+    node._settle_localization, node._drive = Mock(), Mock()
+    node._spin_to = Mock()
+    node.get_logger = lambda: NS(info=Mock())
+    node._align_place((1.8, 0., 0.), NS())
+    assert node._drive.call_count == 1
+    # spin to the cart, spin toward staging, then spin to the cart again; accepted only facing it
+    assert node._spin_to.call_count == 3
 
 
 @pytest.mark.parametrize('error,accepted', [(math.radians(2.), True), (math.radians(4.), False)])

@@ -54,7 +54,7 @@ Códigos de error (se reusan los de `DockRobot`/`UndockRobot`):
 | Código | Significado aquí |
 |---|---|
 | 901 `DOCK_NOT_IN_DB` | Se pasó `use_dock_id: true`; no hay base de datos de carros |
-| 902 `DOCK_NOT_VALID` | `dock_pose` fuera de `map`; en pick, ya lleva carro; en place/drop, no lo lleva; en place, carro sin medir, a más de 0,25 m / 0,5° del robot o con corrección de staging mayor que `place_staging_compensation_limit` |
+| 902 `DOCK_NOT_VALID` | `dock_pose` fuera de `map`; en pick, ya lleva carro; en place/drop, no lo lleva; en place, carro sin medir, a más de 0,25 m / `place_carried_yaw_tolerance` (3°) del robot o con corrección de staging mayor que `place_staging_compensation_limit` |
 | 903 `FAILED_TO_STAGE` | Nav2 no llegó delante del carro (pick); en place, el robot no empieza a ≤0,5 m del staging o la alineación lo saca de él |
 | 904 `FAILED_TO_DETECT_DOCK` | No se ven las patas del carro cerca de la pose dada |
 | 905 `FAILED_TO_CONTROL` | No pudo alinearse, entrar, levantar/bajar o salir; en place, carro fuera de la tolerancia de destino (se niega a bajar); fallo de una guarda de tramo recto |
@@ -79,8 +79,8 @@ Una maniobra a la vez: un segundo goal mientras hay uno en curso se rechaza. Can
 ### `place_cart`
 
 Requiere la plataforma arriba y que el robot empiece a ≤0,5 m del staging del destino (`centro − staging_distance · [cos yaw, sin yaw]`).
-1. Pide al adapter la pose medida del carro respecto del robot; la rechaza si no está medida, a más de 0,25 m o más de 0,5° de yaw relativo, y compensa el offset al calcular el objetivo.
-2. Corrige la alineación en el staging con la huella completa del carro (nunca con el lease: no rota ni corrige lateralmente dentro de una estación).
+1. Pide al adapter la pose medida del carro respecto del robot; la rechaza si no está medida, a más de 0,25 m o más de `place_carried_yaw_tolerance` (3°, la misma del alineado del pick) de yaw relativo, y compensa el offset al calcular el objetivo.
+2. Corrige la alineación en el staging con la huella completa del carro (nunca con el lease: no rota ni corrige lateralmente dentro de una estación). Compara contra AMCL con tolerancias de pocos cm (`place_staging_*_tolerance`), y AMCL solo se actualiza al moverse: recién frenado puede estar 17-19 cm / hasta 8° fuera (medido contra Gazebo; tras 10 actualizaciones en reposo, 4-12 cm / 0,3°). Por eso asienta la localización (`localization_updates`, como el pick) antes de cada medición. El chequeo que vale es el hecho ya orientado al rumbo del carro, porque el giro final desplazó la pose hasta 6 cm (medido en P2): cada ronda asienta y mide; si cumple y aún no está orientado, gira y vuelve a medir; si no cumple, corrige y repite (hasta 6 rondas, `PLACE_ALIGN_ROUNDS`). Con `update_min_d/a` = 0,05 en `nav2_factory_params.yaml` (antes 0,25 m / 0,2 rad) el asentamiento mueve a AMCL solo 1-3 cm (antes 4-13).
 3. Avanza `staging_distance` con un tramo recto guardado hasta el centro del destino.
 4. Comprueba que el centro estimado del carro cumple `place_tolerance_xy` (0,15 m) y `place_tolerance_yaw` (3°); si no, **se niega a bajar**.
 5. `lift_down`, confirma y sale marcha atrás al staging con otro tramo recto (ya con la huella del robot).
@@ -97,7 +97,8 @@ Existen porque con el carro levantado Nav2 no sirve para entrar y salir de una e
 Por eso los tramos staging ↔ centro con carro los hace `cart_handler` en línea recta, con guardas propias:
 - Lease renovable de 0,6 s de la huella del robot (`cart_straight_footprint`), solo para tramos rectos, nunca para rotar, y liberado en toda salida.
 - El handler vigila el **scan crudo** de 360° en la franja de 0,75 m más allá del borde delantero del carro, sin inflado lateral: cualquier retorno aborta, también uno estático. Es independiente del filtro del adapter.
-- Deriva lateral, de yaw y combinada medidas **desde el offset inicial del carro**: defaults 0,03 m / 2° / 0,04 m, techos configurables 0,05 m / 3° / 0,06 m; velocidad máxima 0,15 m/s; el odómetro final debe coincidir con el desplazamiento ordenado a 3 cm.
+- Deriva lateral, de yaw y combinada medidas **desde la pose y el rumbo de salida del tramo** (la línea propia del robot, no el eje del carro: un error de rumbo constante `e` daba `recorrido·sin(e)` de «deriva» lateral aunque el robot fuese recto; medido: 1,1° en 1,8 m = 36 mm con yaw 0,000°). El error de rumbo de salida lo acota el alineado inicial (`lateral_tolerance` / `yaw_tolerance`). Defaults 0,03 m / 2° / 0,04 m, techos configurables 0,05 m / 3° / 0,06 m; velocidad máxima 0,15 m/s; el odómetro final debe coincidir con el desplazamiento ordenado a 3 cm.
+- Un retorno por debajo del `range_min` del lidar (0,55 m) no dice nada útil: el scan se da por **inválido** y la acción aborta (`invalid scan or incomplete angular coverage`). Única excepción: el retroceso de `place_cart` sin carro. Al salir por el eje de un carro recién dejado el robot pasa entre sus patas (±0,48 m de lado, ~0,12 m de holgura por lado), a menos de `range_min` del lidar. Ahí se aceptan esos retornos **solo si todos** apuntan a una pata del carro soltado (a ≤ `released_leg_margin`, 0,10 m, de su centro; el carro es una caja de patas de 4 cm y su pose respecto del robot es la medida antes de bajarlo). NaN, cobertura incompleta o un retorno que no apunta a una pata siguen abortando. Medido en simulación: sin esta excepción el retroceso abortaba a los 0,26 m.
 - Sin TF de scan/odom fresca, cobertura inválida, inconsistencia del lift, pérdida de huella, deriva o cancelación, la acción se detiene; sin confirmación de restauración de la huella queda un fault latcheado (`reset_fault`).
 
 Detalle completo de parámetros y reglas en el README. Las reglas de seguridad ya cerradas no se aflojan sin pedirlo (`CLAUDE.md` de este repo).

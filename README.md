@@ -234,7 +234,7 @@ for this action. `drop_cart` keeps its existing behavior: lower where it is and 
 `backout_distance` (default 1.3 m), using UndockRobot's `max_undocking_time`.
 Placement compensates the measured cart offset when computing the robot target and staging.
 It refuses an unmeasured cart, a measured offset over 0.25 m, cart yaw relative to the robot
-over 0.5 degrees, or a correction
+over `place_carried_yaw_tolerance` (default 3 degrees, the pick alignment tolerance), or a correction
 that exceeds `place_staging_compensation_limit` (default 0.10 m). Before lowering, the
 estimated cart centre must satisfy `place_tolerance_xy` (default 0.15 m) and
 `place_tolerance_yaw` (default 0.0523599 rad, 3 degrees). This map-frame check allows
@@ -246,6 +246,8 @@ Placement parameters (lengths in metres, angles in radians):
 |---|---|---|
 | `place_tolerance_xy` | `0.15` | Maximum estimated cart-centre error before lowering |
 | `place_tolerance_yaw` | `0.05235987755982989` (3 degrees) | Maximum estimated cart-heading error before lowering |
+| `place_carried_yaw_tolerance` | `0.05235987755982989` (3 degrees) | Maximum yaw of the carried cart relative to the robot that `place_cart` accepts |
+| `released_leg_margin` | `0.10` | While backing out of a cart just put down, a laser return below `range_min` is accepted only if it points within this distance of a leg centre of that cart |
 | `place_staging_along_tolerance` | `0.05` | Accepted along-axis error at staging |
 | `place_staging_lateral_tolerance` | `max(0.03, straight_lateral_limit)`; normally `0.03` | Accepted lateral staging error |
 | `place_staging_compensation_limit` | `0.10` | Maximum difference between compensated and nominal staging |
@@ -279,8 +281,9 @@ plus lateral corner excursion; `straight_data_timeout` 0.3 s; `straight_lookahea
 The configurable ceilings are 0.05 m, 0.0523599 rad (3 degrees), and 0.06 m respectively;
 values above them are rejected. Before movement, the measured cart offset from the segment axis
 must satisfy the pick alignment `lateral_tolerance` and `yaw_tolerance`. During movement, the
-guard measures lateral and yaw **drift from that initial offset**, logs the maximum once per
-segment, and reports the measured drift, combined envelope, configured limits, and travelled
+guard measures lateral and yaw **drift from the segment's start pose and heading** (the
+robot's own line, not the cart axis: a constant start heading error is not drift), logs the
+start context, the maximum and a signed drift trace once per segment, and reports the measured drift, combined envelope, configured limits, and travelled
 distance on failure. `motion_frame` defaults to the namespaced odom frame to avoid AMCL jumps;
 `straight_footprint_padding` defaults to the costmaps' 0.05 m. No fresh scan/odom TF, missing
 laser TF, invalid scan coverage, lift inconsistency, footprint loss, drift, or cancellation

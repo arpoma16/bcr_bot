@@ -9,17 +9,21 @@ def test_place_sequence(handler_module):
     node.global_frame = 'map'
     node.staging_distance = 1.8
     node.lift_down = object()
-    calls = []
+    calls, released = [], []
     node._align_place = Mock(side_effect=lambda *args: calls.append('align'))
-    node._straight = Mock(side_effect=lambda distance, *args: calls.append(distance))
+    node._straight = Mock(side_effect=lambda distance, *args, **kw: (
+        calls.append(distance), released.append(kw.get('released_cart'))))
     node._call = Mock(side_effect=lambda *args: calls.append('lower'))
     node._confirm_lift = Mock()
     node._place_target = lambda cart, handle: cart
+    node._placement_geometry = (0.01, -0.02, 0.03)     # cart pose in the robot frame (set by _place_target)
     node._verify_placement = Mock()
     pose = NS(position=NS(x=1.8, y=0.0), orientation=NS(x=0., y=0., z=0., w=1.))
     req = NS(use_dock_id=False, dock_pose=NS(header=NS(frame_id='map'), pose=pose))
     node._do_place(req, NS(is_cancel_requested=False), Mock())
     assert calls == ['align', 1.8, 'lower', -1.8]
+    # Only the back-out, made without the cart, is told where the cart it leaves stands.
+    assert released == [None, (0.01, -0.02, 0.03)]
     node._confirm_lift.assert_called_once()
 
 

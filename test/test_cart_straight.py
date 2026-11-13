@@ -26,6 +26,9 @@ def rig(handler_module, monkeypatch):
     node.straight_data_timeout, node.straight_footprint_padding = .3, .05
     node.server_timeout, node.staging_distance = 1., 1.8
     node.place_tolerance_xy, node.place_tolerance_yaw = .15, math.radians(3.)
+    node.place_carried_yaw_tolerance = math.radians(3.)
+    node.released_leg_margin = .10
+    node.leg_model = m.cart_legs.leg_model(.58, .48)
     node.lateral_tolerance, node.yaw_tolerance = .04, math.radians(3.)
     node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .05, .03
     node.place_staging_compensation_limit = .10
@@ -143,6 +146,106 @@ def test_initial_two_degree_cart_offset_without_drift_passes(rig):
     assert rig.events == [('drive', 1.8)]
 
 
+def _drive_along_heading(rig, heading, forward, sideways=0.):
+    """Robot starts with `heading` and moves `forward` along it (plus `sideways` in its frame)."""
+    def inject():
+        c, s = math.cos(heading), math.sin(heading)
+        rig.pose[0] = forward * c - sideways * s
+        rig.pose[1] = forward * s + sideways * c
+    rig.pose[2] = heading
+    rig.state.after_send = inject
+
+
+@pytest.mark.parametrize('heading_deg', [1.1, 2.0, -2.0])
+def test_constant_start_heading_error_is_not_lateral_drift(rig, heading_deg):
+    # Measured on the real robot: 1.1 deg start error over 1.8 m gave 36 mm against the cart axis
+    # with 0.000 deg of yaw drift. The robot drove perfectly straight; nothing drifted.
+    _drive_along_heading(rig, math.radians(heading_deg), -1.8)
+    rig.node._straight(-1.8, 0., rig.handle, True)
+    logs = [c.args[0] for c in rig.logger.info.call_args_list]
+    assert f'initial_yaw={heading_deg:+.3f}°' in next(m for m in logs if m.startswith('straight-motion start'))
+    maxima = next(m for m in logs if m.startswith('straight-motion maxima'))
+    assert 'lateral=0.000m' in maxima and 'yaw=0.000°' in maxima
+
+
+def test_real_lateral_drift_is_still_caught_with_a_start_heading_error(rig):
+    _drive_along_heading(rig, math.radians(2.), 1.2, sideways=.04)
+    with pytest.raises(rig.m.Failed) as caught:
+        rig.node._straight(1.8, 0., rig.handle, True)
+    assert 'exceeded=lateral' in str(caught.value)
+
+
+def _back_out_between_legs(rig, close_ray, released_cart, close_range=.5):
+    """Robot backs out 1.8 m of a cart left 1.5 m behind its start, ending 0.3 m past its centre.
+
+    There, the rear-right leg is 0.556 m from the laser at -120.3 deg: below the real laser's
+    range_min (0.55 m, measured on the robot), so the return is reported as closer than that.
+    """
+    rig.node.lifted = False
+    rig.scan.range_min = .55
+
+    def inject():
+        rig.pose[0] = -1.8
+        rig.scan.ranges[close_ray] = close_range
+
+    rig.state.after_send = inject
+    rig.node._straight(-1.8, 0., rig.handle, False, released_cart=released_cart)
+
+
+def test_returns_of_the_legs_of_the_cart_just_put_down_are_not_an_invalid_scan(rig):
+    _back_out_between_legs(rig, close_ray=60, released_cart=(-1.5, 0., 0.))   # -120 deg: that leg
+    assert rig.events == [('backup', -1.8)]
+    logs = [c.args[0] for c in rig.logger.info.call_args_list]
+    assert any('accepted as legs of the cart just put down' in m for m in logs)
+
+
+def test_close_return_without_a_released_cart_is_still_an_invalid_scan(rig):
+    with pytest.raises(rig.m.Failed) as caught:
+        _back_out_between_legs(rig, close_ray=60, released_cart=None)
+    assert 'invalid scan' in str(caught.value)
+
+
+def test_close_return_not_pointing_at_a_leg_is_still_an_invalid_scan(rig):
+    with pytest.raises(rig.m.Failed) as caught:
+        _back_out_between_legs(rig, close_ray=150, released_cart=(-1.5, 0., 0.))   # -30 deg: no leg
+    assert 'invalid scan' in str(caught.value)
+
+
+def test_nan_is_never_explained_by_the_legs(rig):
+    with pytest.raises(rig.m.Failed) as caught:
+        _back_out_between_legs(rig, close_ray=60, released_cart=(-1.5, 0., 0.), close_range=math.nan)
+    assert 'invalid scan' in str(caught.value)
+
+
+def test_a_leg_return_explains_only_when_the_leg_is_where_the_ray_points(rig):
+    node, scan = rig.node, rig.scan
+    scan.range_min = .55
+    cart_in_base = (.3, 0., 0.)        # rear-right leg at (-0.28, -0.48): bearing -120.3 deg
+    scan.ranges[60] = .5
+    assert node._close_returns_are_cart_legs(scan, (0., 0., 0.), cart_in_base)
+    scan.ranges[60] = math.inf
+    scan.ranges[61] = .5               # one degree off: 1 cm from the leg centre, still a leg
+    assert node._close_returns_are_cart_legs(scan, (0., 0., 0.), cart_in_base)
+    scan.ranges[61] = math.inf
+    scan.ranges[90] = .5               # -90 deg: nothing there
+    assert not node._close_returns_are_cart_legs(scan, (0., 0., 0.), cart_in_base)
+    scan.ranges[60] = .5               # a leg return does not excuse the other one
+    assert not node._close_returns_are_cart_legs(scan, (0., 0., 0.), cart_in_base)
+
+
+@pytest.mark.parametrize('carried_yaw_deg', [0., .75, -2.5])
+def test_place_accepts_a_cart_left_within_the_pick_tolerance(rig, carried_yaw_deg):
+    _set_measured_cart_pose(rig, (0., 0., math.radians(carried_yaw_deg)))
+    rig.node._place_target((5., 0., 0.), rig.handle)
+
+
+def test_place_rejects_a_cart_beyond_the_carried_yaw_tolerance(rig):
+    _set_measured_cart_pose(rig, (0., 0., math.radians(3.5)))
+    with pytest.raises(rig.m.Failed) as caught:
+        rig.node._place_target((5., 0., 0.), rig.handle)
+    assert 'within 25 cm / 3.0 deg' in str(caught.value) and '3.50 deg' in str(caught.value)
+
+
 def test_moderate_lateral_and_yaw_drift_passes(rig):
     def inject():
         rig.pose[0] = 1.8
@@ -152,10 +255,16 @@ def test_moderate_lateral_and_yaw_drift_passes(rig):
     rig.state.after_send = inject
     rig.node._straight(1.8, 0., rig.handle, True)
     assert rig.events == [('drive', 1.8)]
-    rig.logger.info.assert_called_once()
-    diagnostic = rig.logger.info.call_args.args[0]
+    logs = [c.args[0] for c in rig.logger.info.call_args_list]
+    maxima = [m for m in logs if m.startswith('straight-motion maxima')]
+    assert len(maxima) == 1
     for field in ('lateral=0.020m', 'yaw=1.500°', 'envelope=', 'limit=', 'travelled=1.800m'):
-        assert field in diagnostic
+        assert field in maxima[0]
+    # Measurement lines: start context and a signed drift trace.
+    assert sum(m.startswith('straight-motion start') for m in logs) == 1
+    assert 'initial_yaw=' in next(m for m in logs if m.startswith('straight-motion start'))
+    trace = [m for m in logs if m.startswith('straight-motion trace')]
+    assert len(trace) == 1 and '1.8m:+20mm/+1.50°' in trace[0]
 
 
 @pytest.mark.parametrize('lateral,yaw,exceeded', [
@@ -173,7 +282,8 @@ def test_excessive_drift_reports_values(rig, lateral, yaw, exceeded):
     assert f'exceeded={exceeded}' in message
     for field in ('lateral=', 'yaw=', 'envelope=', 'limit=', 'travelled='):
         assert field in message
-    rig.logger.info.assert_called_once()
+    logs = [c.args[0] for c in rig.logger.info.call_args_list]
+    assert sum(m.startswith('straight-motion maxima') for m in logs) == 1
 
 
 @pytest.mark.parametrize('cart_pose', [

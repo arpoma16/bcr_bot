@@ -22,9 +22,12 @@
       adapter and independently monitor the raw scan and odometry deviation.
       Before each straight segment the measured cart offset from the axis must satisfy
       lateral_tolerance / yaw_tolerance (else FAILED_TO_CONTROL); during it the guard measures the
-      lateral / yaw / envelope drift from that initial offset against straight_lateral_limit,
-      straight_yaw_limit and straight_envelope (README, ceilings 0.05 m / 3 deg / 0.06 m), logs
-      the maxima once per segment and reports the measured values on failure.
+      lateral / yaw / envelope drift from the start pose and heading of the segment (the robot's own
+      line, not the cart axis) against straight_lateral_limit, straight_yaw_limit and
+      straight_envelope (README, ceilings 0.05 m / 3 deg / 0.06 m). It logs the start context,
+      the maxima and a signed drift trace once per segment and reports the measured values on failure.
+      place_cart accepts a carried cart up to place_carried_yaw_tolerance (default 3 deg) of yaw
+      relative to the robot (the pick tolerance) and 0.25 m of offset.
   drop_cart (nav2_msgs/action/UndockRobot)
       lift_down, then backup by backout_distance to leave the cart where it is.
 
@@ -87,6 +90,8 @@ class Failed(Exception):
 
 
 class CartHandler(Node):
+    PLACE_ALIGN_ROUNDS = 6      # measure/correct rounds of the place staging alignment
+
     def __init__(self):
         super().__init__('cart_handler')
         p = self.declare_parameter
@@ -112,6 +117,9 @@ class CartHandler(Node):
         self.leg_model = cart_legs.leg_model(p('leg_x', 0.58).value, p('leg_y', 0.48).value)
         self.leg_search_radius = p('leg_search_radius', 0.25).value
         self.min_legs = p('min_legs', 2).value
+        # Reach of a ray to the centre of a leg of the cart just put down (legs are 4 cm boxes):
+        # a return below the laser's range_min is accepted only if it points at such a leg.
+        self.released_leg_margin = p('released_leg_margin', 0.10).value
         # Forced AMCL updates before looking for the legs (0 disables).
         self.localization_updates = p('localization_updates', 10).value
         self.localization_period = p('localization_period', 0.3).value   # [s] between updates
@@ -125,12 +133,17 @@ class CartHandler(Node):
         self.straight_footprint_padding = p('straight_footprint_padding', 0.05).value
         self.place_tolerance_xy = p('place_tolerance_xy', 0.15).value
         self.place_tolerance_yaw = p('place_tolerance_yaw', math.radians(3.)).value
+        # Max yaw of the carried cart relative to the robot that place_cart accepts. A pick
+        # lifts the cart wherever it sits (aligned within the 3 deg pick tolerance) and
+        # placement compensates the measured pose, so this matches the pick tolerance.
+        self.place_carried_yaw_tolerance = p('place_carried_yaw_tolerance', math.radians(3.)).value
         self.place_staging_along_tolerance = p('place_staging_along_tolerance', 0.05).value
         # Map-frame staging uncertainty is distinct from relative drift in odom.
         self.place_staging_lateral_tolerance = p(
             'place_staging_lateral_tolerance', max(0.03, self.straight_lateral_limit)).value
         self.place_staging_compensation_limit = p('place_staging_compensation_limit', 0.10).value
         for value in (self.place_tolerance_xy, self.place_tolerance_yaw,
+                      self.place_carried_yaw_tolerance, self.released_leg_margin,
                       self.place_staging_along_tolerance, self.place_staging_lateral_tolerance,
                       self.place_staging_compensation_limit):
             if not math.isfinite(value) or value <= 0:
@@ -437,11 +450,39 @@ class CartHandler(Node):
                 raise Failed(DOCK.FAILED_TO_CONTROL, 'costmaps did not restore the full footprint')
             time.sleep(0.02)
 
-    def _straight(self, distance, axis_yaw, handle, carrying):
+    def _close_returns_are_cart_legs(self, scan, laser, cart_in_base):
+        """True if every scan return below range_min points at a leg of the cart on the floor.
+
+        The laser reports nothing useful closer than range_min, so the guard normally treats
+        such a return as an invalid scan. Backing out from a cart just put down passes between
+        its legs, closer than that: those returns are expected, and only those. A return that
+        does not point at a leg (within released_leg_margin of its centre) is still invalid.
+        """
+        ox, oy, oyaw = laser
+        legs = [cart_legs.transform(cart_in_base, leg) for leg in self.leg_model]
+        for i, r in enumerate(scan.ranges):
+            if math.isnan(r) or r >= scan.range_min:
+                continue
+            a = scan.angle_min + i * scan.angle_increment + oyaw
+            dx, dy = math.cos(a), math.sin(a)
+            for lx, ly in legs:
+                along = (lx - ox) * dx + (ly - oy) * dy
+                off = abs((ly - oy) * dx - (lx - ox) * dy)
+                if 0. <= along <= scan.range_min + self.released_leg_margin \
+                        and off <= self.released_leg_margin:
+                    break
+            else:
+                return False
+        return True
+
+    def _straight(self, distance, axis_yaw, handle, carrying, released_cart=None):
         """Nav2 supplies velocity control; an independent guard owns cart clearance.
 
         The footprint lease never authorizes rotation. All checks run before sending
         a goal and at 50 Hz while waiting, including during goal acceptance.
+        released_cart: pose of the cart just put down, in the robot frame at the start of a
+        segment made without it; the guard then tolerates the returns of its legs below the
+        laser's range_min (see _close_returns_are_cart_legs).
         """
         speed = self.approach_speed if distance > 0 else self.backout_speed
         if (not math.isfinite(distance) or distance == 0 or not 0 < speed <= 0.15
@@ -456,6 +497,8 @@ class CartHandler(Node):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'footprint lease service unavailable')
         send = nav_handle = nav_result = None
         maxima = None
+        trace = []       # (travelled, signed lateral drift, yaw drift) every ~0.1 m, logged at the end
+        legs_seen = [0]  # scans with sub-range returns accepted as legs of the cart left behind
 
         def metrics_text(lateral, yaw, envelope, travelled):
             return (f'lateral={abs(lateral):.3f}m yaw={abs(math.degrees(yaw)):.3f}° '
@@ -474,6 +517,9 @@ class CartHandler(Node):
             lease_future = None
             map_pose, origin = self._robot_pose(), self._motion_pose()
             axis = (origin[0], origin[1], origin[2] + _wrap(axis_yaw - map_pose[2]))
+            # The cart put down stays where it is: fix it in the odom frame for the guard.
+            cart_odom = (geometry.compose(origin, released_cart)
+                         if released_cart is not None and not carrying else None)
             # Measure corner excursion of the actual cart, including its offset from
             # the robot, rather than assuming the robot lifted it at its centre.
             cart_at_start = data['cart_pose']
@@ -494,6 +540,12 @@ class CartHandler(Node):
                     f'limit={self.lateral_tolerance:.3f}m '
                     f'yaw={abs(math.degrees(initial_cart_yaw)):.3f}° '
                     f'limit={math.degrees(self.yaw_tolerance):.3f}°')
+            self.get_logger().info(
+                f'straight-motion start: distance={distance:.3f}m '
+                f'initial_yaw={math.degrees(initial_yaw):+.3f}° '
+                f'initial_cart_yaw={math.degrees(initial_cart_yaw):+.3f}° '
+                f'initial_lateral={initial_lateral:+.4f}m cart_offset=({ox:+.3f},{oy:+.3f})m '
+                f'cart_yaw={math.degrees(cart_yaw):+.3f}°')
             maxima = {'lateral': 0., 'yaw': 0., 'envelope': 0., 'travelled': 0.}
             expected_edges = sorted([2 * (data['robot_half_x'] + self.straight_footprint_padding)] * 2
                                     + [2 * (data['robot_half_y'] + self.straight_footprint_padding)] * 2)
@@ -527,16 +579,22 @@ class CartHandler(Node):
                 if self.lifted != carrying:
                     raise Failed(DOCK.FAILED_TO_CONTROL, 'lift state changed during translation')
                 pose = self._motion_pose()
+                # Drift is measured against the line the robot starts on (its own heading),
+                # the same reference as the yaw drift. Against the cart axis, a constant start
+                # heading error e would show up as travelled * sin(e) of "lateral drift" although
+                # nothing drifted (measured: 1.1 deg over 1.8 m = 36 mm with yaw drift 0.000).
+                # The start heading error itself is bounded by the initial alignment check above.
+                relative = geometry.local_pose(pose, origin)
+                yaw = relative[2]                       # heading change since the start
                 # The cart centre traces an offset line if not perfectly centred.
-                relative = geometry.local_pose(pose, axis)
-                yaw = relative[2]
-                lateral = (relative[1] + ox * math.sin(yaw)
-                           + oy * math.cos(yaw) - initial_lateral)
-                yaw_drift = _wrap(_wrap(yaw + cart_yaw) - initial_cart_yaw)
+                lateral = relative[1] + ox * math.sin(yaw) + oy * math.cos(yaw) - oy
+                yaw_drift = yaw
                 cart_error = (relative[0], lateral, yaw_drift)
                 _, _, envelope = geometry.deviation_metrics(
                     cart_error, (0., 0., 0.), data['half_x'], data['half_y'])
                 travelled = abs(relative[0])
+                if not trace or travelled - trace[-1][0] >= 0.1:
+                    trace.append((travelled, lateral, yaw_drift))
                 maxima['lateral'] = max(maxima['lateral'], abs(lateral))
                 maxima['yaw'] = max(maxima['yaw'], abs(yaw_drift))
                 maxima['envelope'] = max(maxima['envelope'], envelope)
@@ -561,13 +619,21 @@ class CartHandler(Node):
                 scan = self._scan[0]
                 if (not scan.ranges or scan.angle_increment <= 0
                         or len(scan.ranges) * scan.angle_increment < 2 * math.pi - 0.05
-                        or any(math.isnan(r) or r < scan.range_min for r in scan.ranges)):
+                        or any(math.isnan(r) for r in scan.ranges)):
                     raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid scan or incomplete angular coverage')
                 try:
                     tf = self.tf_buffer.lookup_transform(self.base_frame, scan.header.frame_id, Time())
                 except TransformException as exc:
                     raise Failed(DOCK.FAILED_TO_CONTROL, f'no laser TF for straight motion: {exc}')
-                points = cart_legs.scan_points(scan, cart_legs.laser_offset_from_tf(tf))
+                laser = cart_legs.laser_offset_from_tf(tf)
+                if any(r < scan.range_min for r in scan.ranges):
+                    # Below range_min the laser says nothing: invalid, unless it is the legs of
+                    # the cart this segment is leaving (every such return must point at a leg).
+                    if cart_odom is None or not self._close_returns_are_cart_legs(
+                            scan, laser, geometry.local_pose(cart_odom, pose)):
+                        raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid scan or incomplete angular coverage')
+                    legs_seen[0] += 1
+                points = cart_legs.scan_points(scan, laser)
                 if geometry.motion_sweep_blocked(points, cart_at_start, data['half_x'], data['half_y'],
                                                   1 if distance > 0 else -1, self.straight_lookahead):
                     raise Failed(DOCK.FAILED_TO_CONTROL, 'obstacle in straight-motion leading sweep')
@@ -614,7 +680,7 @@ class CartHandler(Node):
                 raise Failed(DOCK.FAILED_TO_CONTROL,
                              f'straight motion failed (status {outcome.status}, '
                              f'error_code {getattr(outcome.result, "error_code", "?")})')
-            along, _, _ = geometry.local_pose(self._motion_pose(), axis)
+            along, _, _ = geometry.local_pose(self._motion_pose(), origin)
             if abs(along - distance) > 0.03:
                 raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion endpoint outside 3 cm tolerance')
         except Exception as exc:
@@ -644,6 +710,14 @@ class CartHandler(Node):
                     'straight-motion maxima: '
                     + metrics_text(maxima['lateral'], maxima['yaw'],
                                    maxima['envelope'], maxima['travelled']))
+                if legs_seen[0]:
+                    self.get_logger().info(
+                        f'straight-motion: {legs_seen[0]} scans with returns below range_min '
+                        'accepted as legs of the cart just put down')
+                self.get_logger().info(
+                    'straight-motion trace (travelled: signed lateral/yaw drift): '
+                    + ' '.join(f'{t:.1f}m:{lat * 1000:+.0f}mm/{math.degrees(y):+.2f}°'
+                               for t, lat, y in trace))
             try:
                 self._restore_footprint()
             except Exception as exc:
@@ -786,9 +860,14 @@ class CartHandler(Node):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'cart geometry acknowledgment timed out')
         data = self._lease_result(future.result(), True)
         local = data['cart_pose']
-        if (not data.get('measured') or abs(local[2]) > math.radians(.5)
+        if (not data.get('measured') or abs(local[2]) > self.place_carried_yaw_tolerance
                 or math.hypot(local[0], local[1]) > .25):
-            raise Failed(DOCK.DOCK_NOT_VALID, 'place requires a measured cart within 25 cm / 0.5 deg of robot')
+            seen = (f'{math.hypot(local[0], local[1]):.3f} m / {math.degrees(abs(local[2])):.2f} deg'
+                    if data.get('measured') else 'not measured')
+            raise Failed(DOCK.DOCK_NOT_VALID,
+                         'place requires a measured cart within 25 cm / '
+                         f'{math.degrees(self.place_carried_yaw_tolerance):.1f} deg of robot '
+                         f'(cart: {seen})')
         target = geometry.placement_robot_pose(cart, local)
         nominal = geometry.staging_pose(cart, self.staging_distance)
         corrected = geometry.staging_pose(target, self.staging_distance)
@@ -808,22 +887,40 @@ class CartHandler(Node):
         staging = geometry.staging_pose(cart, self.staging_distance)
         # Small staging corrections retain the full cart footprint. Never use the
         # leased footprint to rotate, or drive a lateral correction inside a station.
-        for _ in range(3):
+        limits = (f'limits {self.place_staging_along_tolerance:.3f} m along / '
+                  f'{self.place_staging_lateral_tolerance:.3f} m lateral')
+        # AMCL only updates when the robot moves, so after Nav2 stops (and after a spin) its
+        # estimate lags: measured 17-19 cm / up to 8 deg off right after arriving, 4-12 cm / 0.3 deg
+        # after 10 updates at rest. These tolerances are a few cm, so settle before comparing.
+        # The check that counts is the one made already facing the cart (the final spin shifted the
+        # pose by up to 6 cm after a check made while facing the staging point). So every round
+        # settles and measures; a measurement within tolerance while not yet facing the cart only
+        # triggers the final spin, and the next round measures again in that condition.
+        facing, pose = False, (0., 0.)
+        for attempt in range(self.PLACE_ALIGN_ROUNDS):
+            self._settle_localization(handle)
             rx, ry, _ = self._robot_pose()
             pose = geometry.local_pose((rx, ry, cart[2]), staging)
             distance = math.hypot(pose[0], pose[1])
+            self.get_logger().info(
+                f'place alignment {attempt}{" (facing the cart)" if facing else ""}: '
+                f'robot ({rx:.3f}, {ry:.3f}) staging ({staging[0]:.3f}, {staging[1]:.3f}), '
+                f'along {pose[0]:+.3f} m, lateral {pose[1]:+.3f} m, {limits}')
             if distance > 0.5:
                 raise Failed(DOCK.FAILED_TO_STAGE, 'place_cart must start within 0.5 m of staging')
             if (abs(pose[0]) <= self.place_staging_along_tolerance
                     and abs(pose[1]) <= self.place_staging_lateral_tolerance):
-                break
+                if facing:
+                    return
+                self._spin_to(cart[2], handle)
+                facing = True
+                continue
+            facing = False
             self._spin_to(math.atan2(staging[1] - ry, staging[0] - rx), handle)
             self._drive(distance, handle, 'align at destination staging')
-        self._spin_to(cart[2], handle)
-        pose = geometry.local_pose(self._robot_pose(), staging)
-        if (abs(pose[0]) > self.place_staging_along_tolerance
-                or abs(pose[1]) > self.place_staging_lateral_tolerance):
-            raise Failed(DOCK.FAILED_TO_STAGE, 'place_cart alignment left the staging position')
+        raise Failed(DOCK.FAILED_TO_STAGE,
+                     'place_cart alignment left the staging position: '
+                     f'along {pose[0]:+.3f} m, lateral {pose[1]:+.3f} m, {limits}')
 
     def _do_place(self, req, handle, feedback):
         if not self.lifted:
@@ -845,7 +942,9 @@ class CartHandler(Node):
         self._verify_placement(cart)
         self._call(self.lift_down, handle, DOCK.FAILED_TO_CONTROL, 'lift_down')
         self._confirm_lift(False, handle)
-        self._straight(-self.staging_distance, target[2], handle, False)
+        # The cart now stands where the robot carried it: its legs are what the robot leaves between.
+        self._straight(-self.staging_distance, target[2], handle, False,
+                       released_cart=self._placement_geometry)
 
     # --------------------------------------------------------------- drop_cart
 
