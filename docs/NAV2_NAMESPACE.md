@@ -1,179 +1,114 @@
-# Nav2 con Namespace para Multi-Robot
+# Nav2 con namespace en Indra
 
-## Descripción
+Esta es la guía de referencia del flujo de navegación de esta fork. Sustituye
+la propuesta histórica de [doc.md](doc.md). El flujo heredado de upstream con
+`nav2.launch.py` se conserva por separado en el [README](../README.md#using-nav2-with-bcr_bot).
 
-La configuración de Nav2 ha sido modificada para usar namespaces, permitiendo múltiples robots simultáneos sin conflictos de topics.
+## Launches y configuración actuales
 
-## Cambios Realizados
+| Archivo | Responsabilidad |
+|---|---|
+| [bcr_bot_gz_spawn.launch.py](../launch/bcr_bot_gz_spawn.launch.py) | Crea el robot en Gazebo; opcionalmente inicia Nav2 con su pose de spawn. |
+| [bcr_bot_nav2.launch.py](../launch/bcr_bot_nav2.launch.py) | Inicia localización, navegación y nodos de carros para un robot ya creado. |
+| [nav2_factory.launch.py](../launch/nav2_factory.launch.py) | Wrapper para el robot de fábrica ya creado por Indra; lo utiliza `run.yml` del workspace. |
+| [nav2_factory_params.yaml](../config/nav2_factory_params.yaml) | Parámetros del flujo Indra. |
+| [factory_map_2.yaml](../config/factory_map_2.yaml) | Mapa predeterminado. |
 
-### 1. Launch File ([nav2.launch.py](../launch/nav2.launch.py))
-- Agregado soporte para namespace con `GroupAction` y `PushRosNamespace`
-- Namespace por defecto: `bcr_bot`
-- Todos los nodos de nav2 se lanzan dentro del namespace
+El argumento del flujo Indra es `robot_namespace`. Nav2 exige que no esté vacío
+y usa `bcr_bot` por defecto. El spawn admite namespace vacío para el flujo
+heredado, pero exige uno al activar `launch_nav2` (desactivado por defecto).
 
-### 2. Parámetros ([nav2_params.yaml](../config/nav2_params.yaml))
-- Removidos prefijos `/bcr_bot/` de todos los topics
-- Ahora usan topics relativos que se resuelven al namespace
-- Topics actualizados:
-  - `scan_topic: scan` → `/bcr_bot/scan`
-  - `odom_topic: odom` → `/bcr_bot/odom`
-
-### 3. Nodos Personalizados
-
-#### set_initial_pose.py
-- Modificado para publicar en `initialpose` (relativo)
-- Se convierte en `/bcr_bot/initialpose` con el namespace
-
-#### remapper.py
-- Actualizado para trabajar con topics relativos
-- Nota: Puede no ser necesario si nav2 está correctamente namespaciado
-
-## Topics Importantes
-
-Con namespace `bcr_bot`, los topics son:
-
-### Entrada (del robot):
-- `/bcr_bot/scan` - Datos del lidar
-- `/bcr_bot/odom` - Odometría del robot
-- `/bcr_bot/joint_states` - Estados de las articulaciones
-
-### Salida (a nav2):
-- `/bcr_bot/cmd_vel` - Comandos de velocidad desde nav2
-- `/bcr_bot/goal_pose` - Objetivo de navegación
-- `/bcr_bot/initialpose` - Pose inicial para AMCL
-
-### Servicios:
-- `/bcr_bot/navigate_to_pose` - Navegar a una pose
-- `/bcr_bot/navigate_through_poses` - Navegar por múltiples poses
-- `/bcr_bot/compute_path_to_pose` - Calcular ruta
-
-### Tópicos de visualización:
-- `/bcr_bot/local_costmap/costmap` - Costmap local
-- `/bcr_bot/global_costmap/costmap` - Costmap global
-- `/bcr_bot/plan` - Ruta planificada
-- `/bcr_bot/particle_cloud` - Partículas de AMCL
+El YAML utiliza `<robot_name>` para frames, sustituido por el launch, y
+`<robot_namespace>` para tópicos, sustituido por `nav2_bringup`. No se necesita
+mantener una copia de parámetros por robot. `config/nav2_params.yaml` pertenece
+al flujo heredado y no es la configuración de fábrica.
 
 ## Uso
 
-### Lanzar Nav2 con namespace por defecto (bcr_bot):
+Los comandos requieren un entorno ROS 2 Jazzy con los paquetes instalados y
+Gazebo con el mundo ya iniciado. No arrancan el mundo.
+
+Para el robot de fábrica ya creado por Indra:
 
 ```bash
-ros2 launch bcr_bot nav2.launch.py
+ros2 launch bcr_bot nav2_factory.launch.py
 ```
 
-### Lanzar con namespace personalizado:
+El wrapper usa namespace `bcr_bot`, pose `(15.0, -24.0, -1.57)` (metros y radianes)
+y RViz habilitado. La pose debe coincidir con la del robot en el mapa.
+
+Para iniciar Nav2 sobre otro robot ya creado:
 
 ```bash
-ros2 launch bcr_bot nav2.launch.py namespace:=robot_1
+ros2 launch bcr_bot bcr_bot_nav2.launch.py \
+  robot_namespace:=robot_1 \
+  position_x:=15.0 position_y:=-24.0 orientation_yaw:=-1.57
 ```
 
-### Enviar objetivo de navegación:
+Este launch admite `map`, `params_file`, `use_sim_time`, `autostart`,
+`set_initial_pose`, `initial_pose_delay` y `rviz`, además del namespace y la pose.
+Por defecto, inicializa AMCL, usa tiempo de simulación y no abre RViz.
+Para cambiar mapa o parámetros, pasar sus rutas mediante `map` y `params_file`
+al launch `bcr_bot_nav2.launch.py`.
+
+Para crear el robot e iniciar Nav2 en un solo paso:
 
 ```bash
-# Con namespace por defecto
-ros2 topic pub /bcr_bot/goal_pose geometry_msgs/msg/PoseStamped "..."
-
-# Con namespace personalizado
-ros2 topic pub /robot_1/goal_pose geometry_msgs/msg/PoseStamped "..."
+ros2 launch bcr_bot bcr_bot_gz_spawn.launch.py \
+  robot_namespace:=robot_1 launch_nav2:=True \
+  position_x:=15.0 position_y:=-24.0 orientation_yaw:=-1.57
 ```
 
-### Usar desde Python:
+En el spawn, los overrides se llaman `nav2_map` y `nav2_params_file` y se
+transmiten a Nav2 junto con la pose de spawn. Para varios robots, repetir con
+un namespace distinto y la pose correspondiente a cada uno. Iniciar una sola
+instancia de Nav2 por robot: si la inicia el spawn, no lanzar además el wrapper.
 
-```python
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
+## Tópicos, acciones y TF
 
-class Navigator(Node):
-    def __init__(self, namespace='bcr_bot'):
-        super().__init__('navigator', namespace=namespace)
+Para `robot_namespace:=robot_1`:
 
-        self.goal_pub = self.create_publisher(
-            PoseStamped,
-            'goal_pose',  # Relativo al namespace
-            10
-        )
+| Interfaz | Tipo o función |
+|---|---|
+| `/robot_1/scan` | Láser crudo del robot. |
+| `/robot_1/scan_filtered` | Láser filtrado por `cart_carry_adapter.py`, consumido por AMCL y navegación. |
+| `/robot_1/odom` | Odometría. |
+| `/robot_1/cmd_vel` | Comandos de velocidad hacia el robot. |
+| `/robot_1/amcl_pose` | Estimación de pose de AMCL. |
+| `/robot_1/set_initial_pose` | Servicio de inicialización de AMCL. |
+| `/robot_1/navigate_to_pose` | Acción de navegación a una pose. |
+| `/robot_1/navigate_through_poses` | Acción de navegación por varias poses. |
+| `/robot_1/compute_path_to_pose` | Acción de cálculo de ruta. |
 
-    def send_goal(self, x, y, yaw):
-        goal = PoseStamped()
-        goal.header.frame_id = 'map'
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = x
-        goal.pose.position.y = y
-        # ... configurar orientación
+El frame global es `map`; los frames del robot llevan prefijo, por ejemplo
+`robot_1/odom`, `robot_1/base_footprint` y `robot_1/base_link`.
+Nav2 consume TF del namespace (`/robot_1/tf` y `/robot_1/tf_static`). El spawn
+crea también relays a `/tf` y `/tf_static` para consumidores globales.
 
-        self.goal_pub.publish(goal)
+Con `set_initial_pose:=True`, [set_initial_pose.py](../scripts/set_initial_pose.py)
+usa el servicio `/<ns>/set_initial_pose` y reintenta hasta recibir
+`/<ns>/amcl_pose`. No inicializa AMCL publicando en `initialpose`.
 
-# Usar con namespace
-navigator = Navigator(namespace='bcr_bot')
-```
+Los nodos `cart_carry_adapter.py` y `cart_handler.py` arrancan con Nav2.
+Sus interfaces y parámetros se mantienen en el
+[README](../README.md#lift-platform-and-carts-this-fork-gz-sim), y el diseño y
+los límites de los carros en [LIFT_CARTS.md](LIFT_CARTS.md).
 
-## Multi-Robot
+## Comprobaciones en una sesión ya iniciada
 
-Para usar múltiples robots:
+Estos diagnósticos son de lectura y deben ejecutarse en el entorno ROS de la
+simulación. Sustituir `robot_1` por el namespace utilizado:
 
 ```bash
-# Terminal 1 - Robot 1
-ros2 launch bcr_bot nav2.launch.py namespace:=robot_1
-
-# Terminal 2 - Robot 2
-ros2 launch bcr_bot nav2.launch.py namespace:=robot_2
+ros2 action list -t
+ros2 service list
+ros2 topic info /robot_1/scan
+ros2 topic info /robot_1/scan_filtered
+ros2 topic info /robot_1/odom
+ros2 topic echo /robot_1/amcl_pose --once
 ```
 
-Cada robot tendrá sus propios topics:
-- Robot 1: `/robot_1/goal_pose`, `/robot_1/cmd_vel`, etc.
-- Robot 2: `/robot_2/goal_pose`, `/robot_2/cmd_vel`, etc.
-
-## Verificación
-
-Para verificar que todo funciona correctamente:
-
-```bash
-# Listar todos los topics del namespace
-ros2 topic list | grep /bcr_bot
-
-# Ver servicios disponibles
-ros2 service list | grep /bcr_bot
-
-# Verificar que nav2 esté recibiendo datos del lidar
-ros2 topic hz /bcr_bot/scan
-
-# Verificar odometría
-ros2 topic hz /bcr_bot/odom
-```
-
-## Solución de Problemas
-
-### Nav2 no recibe datos del lidar
-Verificar que el topic esté publicándose:
-```bash
-ros2 topic echo /bcr_bot/scan --once
-```
-
-### AMCL no se inicializa
-Verificar que `set_initial_pose.py` esté corriendo y publicando en el namespace correcto:
-```bash
-ros2 topic echo /bcr_bot/initialpose
-```
-
-### Comandos de velocidad no llegan al robot
-Verificar la cadena de topics:
-```bash
-# Nav2 debería publicar aquí
-ros2 topic hz /bcr_bot/cmd_vel
-
-# El robot debería suscribirse aquí
-ros2 topic info /bcr_bot/cmd_vel
-```
-
-## Archivos Modificados
-
-1. [launch/nav2.launch.py](../launch/nav2.launch.py)
-2. [config/nav2_params.yaml](../config/nav2_params.yaml)
-3. [scripts/set_initial_pose.py](../scripts/set_initial_pose.py)
-4. [scripts/remapper.py](../scripts/remapper.py)
-
-## Referencias
-
-- [Nav2 Documentation](https://navigation.ros.org/)
-- [ROS2 Namespaces](https://docs.ros.org/en/jazzy/Tutorials/Beginner-CLI-Tools/Understanding-ROS2-Nodes/Understanding-ROS2-Nodes.html#remapping)
+Si AMCL no recibe láser, comprobar tanto el scan crudo como el filtrado y el
+nodo `cart_carry_adapter`. Si no se inicializa, comprobar el servicio
+`set_initial_pose` y la pose configurada. La existencia de tópicos no prueba
+que la navegación funcione: hace falta validación en simulación.

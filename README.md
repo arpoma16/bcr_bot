@@ -183,6 +183,9 @@ ros2 run nav2_map_server map_saver_cli -f bcr_map
 
 ### Using Nav2 with bcr_bot
 
+For the Indra factory and multi-robot flow, see the
+[Nav2 namespace guide](docs/NAV2_NAMESPACE.md). The commands below describe the upstream flow.
+
 Nav2 is an open-source navigation package that enables a robot to navigate through an environment easily. It takes laser scan and odometry data, along with the map of the environment, as inputs.
 
 NOTE: The command to run navigation is common between all versions of gazebo, MuJoCo and Isaac sim.

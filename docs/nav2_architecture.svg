@@ -1,0 +1,221 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 690" width="1500" height="690" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="ai" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#15803d"/>
+    </marker>
+    <style>
+      .t  { font-size: 15px; font-weight: 700; fill: #0f172a; }
+      .s  { font-size: 12px; fill: #334155; }
+      .l  { font-size: 11px; fill: #475569; font-style: italic; }
+      .h  { font-size: 22px; font-weight: 700; fill: #0f172a; }
+      .node { fill: #f8fafc; stroke: #64748b; stroke-width: 1.5; }
+      .in   { fill: #dbeafe; stroke: #1d4ed8; stroke-width: 2; }
+      .out  { fill: #dcfce7; stroke: #15803d; stroke-width: 2; }
+      .core { fill: #fffbeb; stroke: #b45309; stroke-width: 2; stroke-dasharray: 8 4; }
+      .off  { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+      .safe { fill: #fee2e2; stroke: #b91c1c; stroke-width: 1.5; }
+      .cus  { fill: #ede9fe; stroke: #6d28d9; stroke-width: 1.5; }
+      .w  { fill: none; stroke: #475569; stroke-width: 1.8; }
+      .wi { fill: none; stroke: #1d4ed8; stroke-width: 2.2; }
+      .wo { fill: none; stroke: #15803d; stroke-width: 2.6; }
+      .wd { fill: none; stroke: #475569; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    </style>
+  </defs>
+
+  <rect width="1500" height="690" fill="#ffffff"/>
+  <text x="30" y="36" class="h">bcr_bot · Sistema de navegación (Nav2 Jazzy, dentro de /&lt;ns&gt;)</text>
+  <text x="30" y="56" class="s">Fuente: config/nav2_factory_params.yaml · launch/bcr_bot_nav2.launch.py · urdf/bcr_bot.xacro · robot de 0.90 × 0.64 m, tracción diferencial</text>
+
+  <!-- ENTRADAS -->
+  <text x="30" y="88" class="t" fill="#1d4ed8">ENTRADAS</text>
+
+  <rect x="30" y="100" width="180" height="70" rx="8" class="in"/>
+  <text x="42" y="122" class="t">Goal</text>
+  <text x="42" y="140" class="s">action navigate_to_pose</text>
+  <text x="42" y="156" class="s">(RMF / HMI / RViz goal_pose)</text>
+
+  <rect x="30" y="230" width="180" height="70" rx="8" class="in"/>
+  <text x="42" y="252" class="t">Mapa</text>
+  <text x="42" y="270" class="s">factory_map_2.yaml</text>
+  <text x="42" y="286" class="s">0.05 m/px · trinary</text>
+
+  <rect x="30" y="370" width="180" height="86" rx="8" class="in"/>
+  <text x="42" y="392" class="t">LiDAR 2D</text>
+  <text x="42" y="410" class="s">/&lt;ns&gt;/scan · 30 Hz</text>
+  <text x="42" y="426" class="s">361 haces, 360°</text>
+  <text x="42" y="442" class="s">rango 0.55 – 16 m</text>
+
+  <rect x="30" y="515" width="180" height="60" rx="8" class="in" stroke-dasharray="5 3"/>
+  <text x="42" y="537" class="t">Odometría + TF</text>
+  <text x="42" y="555" class="s">/&lt;ns&gt;/odom (realimentación)</text>
+
+  <!-- NUCLEO -->
+  <rect x="240" y="70" width="980" height="545" rx="12" class="core"/>
+  <text x="256" y="92" class="t" fill="#b45309">NAV2 · stack interno</text>
+
+  <!-- Col1 -->
+  <rect x="290" y="100" width="170" height="70" rx="6" class="node"/>
+  <text x="302" y="122" class="t">bt_navigator</text>
+  <text x="302" y="140" class="s">NavigateToPose</text>
+  <text x="302" y="156" class="s">NavigateThroughPoses</text>
+
+  <rect x="290" y="230" width="170" height="70" rx="6" class="node"/>
+  <text x="302" y="252" class="t">map_server</text>
+  <text x="302" y="270" class="s">publica /map</text>
+  <text x="302" y="286" class="s">(transient local)</text>
+
+  <rect x="290" y="370" width="170" height="70" rx="6" class="cus"/>
+  <text x="302" y="392" class="t">cart_carry_adapter</text>
+  <text x="302" y="410" class="s">scan → scan_filtered</text>
+  <text x="302" y="426" class="s">footprint robot / carro</text>
+
+  <rect x="290" y="470" width="170" height="100" rx="6" class="node"/>
+  <text x="302" y="492" class="t">AMCL</text>
+  <text x="302" y="510" class="s">likelihood_field · 60 haces</text>
+  <text x="302" y="526" class="s">500–2000 partículas</text>
+  <text x="302" y="542" class="s">DifferentialMotionModel</text>
+  <text x="302" y="558" class="s">publica TF map→odom</text>
+
+  <!-- Col2 -->
+  <rect x="520" y="215" width="190" height="115" rx="6" class="node"/>
+  <text x="532" y="237" class="t">global_costmap</text>
+  <text x="532" y="255" class="s">frame map · 0.05 m · 5 Hz</text>
+  <text x="532" y="271" class="s">static_layer</text>
+  <text x="532" y="287" class="s">obstacle_layer (scan, 2.5 m)</text>
+  <text x="532" y="303" class="s">inflation r=0.85 · k=1.5</text>
+  <text x="532" y="319" class="s">footprint 0.90×0.64 + 0.05</text>
+
+  <rect x="520" y="360" width="190" height="115" rx="6" class="node"/>
+  <text x="532" y="382" class="t">local_costmap</text>
+  <text x="532" y="400" class="s">ventana móvil 5×5 m · 10 Hz</text>
+  <text x="532" y="416" class="s">voxel_layer (scan, 2.5 m)</text>
+  <text x="532" y="432" class="s">inflation r=0.85 · k=1.5</text>
+  <text x="532" y="448" class="s">frame &lt;ns&gt;/odom</text>
+
+  <!-- Col3 -->
+  <rect x="780" y="100" width="190" height="80" rx="6" class="node"/>
+  <text x="792" y="122" class="t">planner_server</text>
+  <text x="792" y="140" class="s">NavfnPlanner · A*</text>
+  <text x="792" y="156" class="s">tolerance 0.5 · allow_unknown</text>
+  <text x="792" y="172" class="s">lee global_costmap + pose TF</text>
+
+  <rect x="780" y="200" width="190" height="70" rx="6" class="off"/>
+  <text x="792" y="222" class="t" fill="#64748b">smoother_server</text>
+  <text x="792" y="240" class="s">SimpleSmoother · 1000 its</text>
+  <text x="792" y="256" class="s">el BT por defecto no lo llama</text>
+
+  <rect x="780" y="300" width="190" height="130" rx="6" class="node"/>
+  <text x="792" y="322" class="t">controller_server · 20 Hz</text>
+  <text x="792" y="340" class="s">RotationShimController</text>
+  <text x="792" y="356" class="s"> └ Regulated Pure Pursuit</text>
+  <text x="792" y="372" class="s">v_max 1.0 m/s · lookahead 0.6</text>
+  <text x="792" y="388" class="s">goal: xy 0.25 m · yaw 0.05 rad</text>
+  <text x="792" y="404" class="s">sin reversa · detección colisión</text>
+  <text x="792" y="420" class="s">(time-to-collision 1.2 s)</text>
+
+  <rect x="780" y="455" width="190" height="100" rx="6" class="node"/>
+  <text x="792" y="477" class="t">behavior_server · 20 Hz</text>
+  <text x="792" y="495" class="s">spin · backup</text>
+  <text x="792" y="511" class="s">drive_on_heading · wait</text>
+  <text x="792" y="527" class="s">assisted_teleop</text>
+  <text x="792" y="543" class="s">(recuperación y cart_handler)</text>
+
+  <!-- Col4 -->
+  <rect x="1030" y="300" width="170" height="110" rx="6" class="node"/>
+  <text x="1042" y="322" class="t">velocity_smoother</text>
+  <text x="1042" y="340" class="s">20 Hz · OPEN_LOOP</text>
+  <text x="1042" y="356" class="s">v ±1.0 m/s · ω ±2.0 rad/s</text>
+  <text x="1042" y="372" class="s">acel 3.0 m/s² · 4.0 rad/s²</text>
+  <text x="1042" y="388" class="s">sin velocidad lateral (y=0)</text>
+
+  <rect x="1030" y="440" width="170" height="85" rx="6" class="safe"/>
+  <text x="1042" y="462" class="t">collision_monitor</text>
+  <text x="1042" y="480" class="s">FootprintApproach</text>
+  <text x="1042" y="496" class="s">frena si colisión &lt; 2 s</text>
+  <text x="1042" y="512" class="s">min_points 6 · usa scan_filtered</text>
+
+  <!-- WIRES: inputs -->
+  <path d="M210,135 H290" class="wi" marker-end="url(#ai)"/>
+  <path d="M210,265 H290" class="wi" marker-end="url(#ai)"/>
+  <path d="M210,405 H290" class="wi" marker-end="url(#ai)"/>
+  <path d="M210,545 H290" class="wd" marker-end="url(#a)"/>
+  <!-- map branch to AMCL via gutter -->
+  <path d="M250,265 V500 H290" class="wi" marker-end="url(#ai)"/>
+  <circle cx="250" cy="265" r="3.5" fill="#1d4ed8"/>
+  <text x="156" y="222" class="l"> </text>
+
+  <!-- internal -->
+  <path d="M460,265 H520" class="w" marker-end="url(#a)"/>
+  <text x="466" y="258" class="l">/map</text>
+
+  <path d="M375,440 V470" class="w" marker-end="url(#a)"/>
+  <text x="381" y="460" class="l">scan_filtered</text>
+
+  <path d="M460,415 H520" class="w" marker-end="url(#a)"/>
+  <path d="M480,415 V305 H520" class="w" marker-end="url(#a)"/>
+  <circle cx="480" cy="415" r="3.5" fill="#475569"/>
+
+  <path d="M710,125 H780" class="w" marker-start="url(#a)" marker-end="url(#a)"/>
+  <text x="714" y="118" class="l">ComputePath ⇄ ruta</text>
+
+  <path d="M460,160 H750 V500 H780" class="w" marker-end="url(#a)"/>
+  <path d="M750,350 H780" class="w" marker-end="url(#a)"/>
+  <circle cx="750" cy="350" r="3.5" fill="#475569"/>
+  <text x="634" y="152" class="l">FollowPath · Spin · BackUp</text>
+
+  <!-- AMCL: salida TF y pose inicial -->
+  <path d="M460,520 H520" class="w" marker-end="url(#a)"/>
+  <rect x="520" y="495" width="190" height="60" rx="6" class="node"/>
+  <text x="532" y="517" class="t">TF map → odom</text>
+  <text x="532" y="535" class="s">la usan bt_navigator, planner,</text>
+  <text x="532" y="549" class="s">costmaps y controller</text>
+
+  <rect x="30" y="585" width="180" height="40" rx="8" class="in"/>
+  <text x="42" y="602" class="t">set_initial_pose.py</text>
+  <text x="42" y="617" class="s">initialpose (al arrancar)</text>
+  <path d="M210,605 H270 V560 H290" class="wi" marker-end="url(#ai)"/>
+  <path d="M710,415 H780" class="wd" marker-end="url(#a)"/>
+  <path d="M710,225 H730 V172 H780" class="wd" marker-end="url(#a)"/>
+  <text x="722" y="212" class="l">costmap</text>
+
+  <path d="M970,345 H1030" class="w" marker-end="url(#a)"/>
+  <path d="M970,500 H1000 V385 H1030" class="w" marker-end="url(#a)"/>
+  <text x="976" y="337" class="l">cmd_vel_nav</text>
+
+  <path d="M1115,410 V440" class="w" marker-end="url(#a)"/>
+  <text x="1122" y="429" class="l">cmd_vel_smoothed</text>
+
+  <!-- scan_filtered bus to collision_monitor -->
+  <path d="M480,415 V588 H1160 V525" class="wd" marker-end="url(#a)"/>
+  <text x="900" y="582" class="l">scan_filtered (lo lee también el collision_monitor)</text>
+
+  <!-- SALIDAS -->
+  <text x="1260" y="388" class="t" fill="#15803d">SALIDA</text>
+  <path d="M1200,482 H1280" class="wo" marker-end="url(#ao)"/>
+  <rect x="1280" y="420" width="190" height="125" rx="8" class="out"/>
+  <text x="1292" y="444" class="t">cmd_vel</text>
+  <text x="1292" y="464" class="s">/&lt;ns&gt;/cmd_vel</text>
+  <text x="1292" y="480" class="s">geometry_msgs/Twist</text>
+  <text x="1292" y="500" class="s">linear.x  (m/s)</text>
+  <text x="1292" y="516" class="s">angular.z (rad/s)</text>
+  <text x="1292" y="532" class="s">tracción diferencial</text>
+  <path d="M1375,545 V590" class="wo" marker-end="url(#ao)"/>
+  <rect x="1280" y="590" width="190" height="50" rx="8" class="node"/>
+  <text x="1292" y="612" class="t">Gazebo diff-drive</text>
+  <text x="1292" y="629" class="s">mueve el AGV bcr_bot</text>
+
+  <!-- LEYENDA -->
+  <text x="30" y="634" class="t">Leyenda</text>
+  <rect x="30" y="644" width="16" height="12" class="cus"/><text x="52" y="655" class="s">nodo propio de bcr_bot (fork)</text>
+  <rect x="250" y="644" width="16" height="12" class="node"/><text x="272" y="655" class="s">nodo estándar Nav2</text>
+  <rect x="410" y="644" width="16" height="12" class="safe"/><text x="432" y="655" class="s">seguridad (último filtro)</text>
+  <path d="M600,650 H640" class="wd" marker-end="url(#a)"/><text x="648" y="655" class="s">dato / lectura de costmap</text>
+  <rect x="860" y="644" width="16" height="12" class="off"/><text x="882" y="655" class="s">activo pero sin uso en el BT por defecto</text>
+  <text x="30" y="678" class="s">Cadena de salida: controller_server → cmd_vel_nav → velocity_smoother → cmd_vel_smoothed → collision_monitor → cmd_vel</text>
+</svg>
