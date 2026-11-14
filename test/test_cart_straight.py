@@ -357,6 +357,7 @@ def test_pick_finishes_with_lift_and_staging_backout(rig):
     node._detect_cart = lambda cart: cart
     node.get_logger = lambda: NS(info=Mock(), error=Mock(), debug=Mock())
     node.pre_entry_distance, node.lateral_tolerance, node.yaw_tolerance = 1.3, .04, .06
+    node.pick_lateral_tolerance = .02
     node.max_corrections = 3
     rig.pose[0] = -1.
     node._drive = lambda distance, *args: (rig.events.append(('entry', distance)),

@@ -26,7 +26,8 @@ def test_pick_accepts_existing_alignment_tolerances(handler_module):
     node = object.__new__(m.CartHandler)
     node.lifted, node.global_frame = False, 'map'
     node.staging_distance, node.pre_entry_distance = 1.8, 1.3
-    node.lateral_tolerance, node.yaw_tolerance = .04, math.radians(3.)
+    node.lateral_tolerance, node.pick_lateral_tolerance = .04, .04
+    node.yaw_tolerance = math.radians(3.)
     node.max_corrections = 0
     # Predicted lateral offset at the centre is 3 cm, heading error is 2 deg.
     node._robot_pose = lambda: (-1., .03 - math.sin(math.radians(2.)), math.radians(2.))
@@ -42,6 +43,116 @@ def test_pick_accepts_existing_alignment_tolerances(handler_module):
     node._do_pick(request, handle, Mock())
     node._drive.assert_called_once_with(1., handle, 'drive under the cart')
     assert node._straight.call_args.args[0] == -1.8
+
+
+def test_pick_does_not_enter_with_the_lateral_offset_that_collided_in_the_simulation(handler_module):
+    m = handler_module
+    node = object.__new__(m.CartHandler)
+    node.lifted, node.global_frame = False, 'map'
+    node.staging_distance, node.pre_entry_distance = 1.8, 1.3
+    node.lateral_tolerance, node.pick_lateral_tolerance = .04, .02
+    node.yaw_tolerance = math.radians(3.)
+    node.max_corrections = 0
+    # P2: 2.8 cm predicted at the cart centre. Nav2 aborted the drive under the cart with
+    # COLLISION_AHEAD (723): only 4-9 cm per side remain between the legs and the padded footprint.
+    node._robot_pose = lambda: (-1., -.028, 0.)
+    node._detect_cart = lambda cart: cart
+    node._settle_localization = Mock()
+    node.get_logger = lambda: NS(info=Mock())
+    node._drive, node._call, node._straight, node._confirm_lift = Mock(), Mock(), Mock(), Mock()
+    pose = NS(position=NS(x=0., y=0.), orientation=NS(x=0., y=0., z=0., w=1.))
+    request = NS(use_dock_id=False, navigate_to_staging_pose=False,
+                 dock_pose=NS(header=NS(frame_id='map'), pose=pose))
+    with pytest.raises(m.Failed, match='could not align'):
+        node._do_pick(request, NS(is_cancel_requested=False), Mock())
+    node._drive.assert_not_called()
+
+
+def test_pick_demands_the_strict_lateral_only_near_the_cart(handler_module):
+    m = handler_module
+    node = object.__new__(m.CartHandler)
+    node.lifted, node.global_frame = False, 'map'
+    node.staging_distance, node.pre_entry_distance = 1.8, 1.3
+    node.lateral_tolerance, node.pick_lateral_tolerance = .04, .02
+    node.yaw_tolerance = math.radians(3.)
+    node.max_corrections = 0
+    pose = [-1.95, -.03, 0.]          # far: 3 cm is fine for the coarse check (+-0.7 deg spin noise)
+
+    def drive(distance, handle, what):
+        if what == 'approach to pre-entry':
+            pose[0] += distance
+            pose[1] = -.012           # near: 1.2 cm passes the strict check
+        calls.append((round(distance, 2), what))
+    calls = []
+    node._robot_pose = lambda: tuple(pose)
+    node._detect_cart = lambda cart: cart
+    node._settle_localization = Mock()
+    node.get_logger = lambda: NS(info=Mock())
+    node._drive, node._call, node._straight, node._confirm_lift = drive, Mock(), Mock(), Mock()
+    node.lift_up = object()
+    cart_pose = NS(position=NS(x=0., y=0.), orientation=NS(x=0., y=0., z=0., w=1.))
+    request = NS(use_dock_id=False, navigate_to_staging_pose=False,
+                 dock_pose=NS(header=NS(frame_id='map'), pose=cart_pose))
+    node._do_pick(request, NS(is_cancel_requested=False), Mock())
+    assert calls == [(.65, 'approach to pre-entry'), (1.3, 'drive under the cart')]
+
+
+def _cart_in_robot_frame(along, lateral, yaw_err):
+    """The detection (cart pose in the robot frame) of a robot standing at these coordinates in
+    the cart frame."""
+    theta = -yaw_err
+    return (-(along * math.cos(theta) - lateral * math.sin(theta)),
+            -(along * math.sin(theta) + lateral * math.cos(theta)), theta)
+
+
+def test_cart_relative_pose_from_the_scan_matches_the_pose_based_one(handler_module):
+    m = handler_module
+    node = object.__new__(m.CartHandler)
+    cart = (3., -2., math.radians(164.))
+    robot = (3. + 1.9 * math.cos(cart[2]) - .03 * math.sin(cart[2]),
+             -2. + 1.9 * math.sin(cart[2]) + .03 * math.cos(cart[2]), cart[2] + math.radians(1.5))
+    node._robot_pose = lambda: robot
+    from_poses = node._cart_relative(cart)
+    # The same geometry as the scan reports it (cart in the robot frame): no AMCL involved.
+    node._cart_in_base = _cart_in_robot_frame(*from_poses)
+    node._robot_pose = Mock(side_effect=AssertionError('AMCL must not be read'))
+    assert node._cart_relative(cart) == pytest.approx(from_poses)
+    assert node._cart_in_base is None          # consumed: one detection, one use
+
+
+def test_pick_correction_is_made_relative_to_the_cart_axis(handler_module):
+    m = handler_module
+    node = object.__new__(m.CartHandler)
+    node.lifted, node.global_frame = False, 'map'
+    node.staging_distance, node.pre_entry_distance = 1.8, 1.3
+    node.lateral_tolerance, node.pick_lateral_tolerance = .04, .02
+    node.yaw_tolerance = math.radians(3.)
+    node.max_corrections = 3
+    node.correction_lookahead, node.min_correction_clearance = .5, 1.3
+    seen = iter([(-2.0, .05, 0.),        # far, 5 cm off the axis: correct
+                 (-2.0, .004, 0.),       # far, fine: approach
+                 (-1.3, .004, 0.)])      # near, fine: drive under the cart
+    calls = []
+
+    def detect(cart):
+        node._cart_in_base = _cart_in_robot_frame(*next(seen))
+        return cart
+    node._detect_cart = detect
+    node._robot_pose = Mock(side_effect=AssertionError('AMCL must not be read'))
+    node._settle_localization = Mock()
+    node._spin_by = lambda delta, handle: calls.append(('spin', round(delta, 4)))
+    node._drive = lambda distance, handle, what: calls.append(('drive', round(distance, 4)))
+    node._call, node._straight, node._confirm_lift = Mock(), Mock(), Mock()
+    node.lift_up = object()
+    node.get_logger = lambda: NS(info=Mock())
+    pose = NS(position=NS(x=0., y=0.), orientation=NS(x=0., y=0., z=0., w=1.))
+    request = NS(use_dock_id=False, navigate_to_staging_pose=False,
+                 dock_pose=NS(header=NS(frame_id='map'), pose=pose))
+    node._do_pick(request, NS(is_cancel_requested=False), Mock())
+    bearing = math.atan2(-.05, .5)
+    assert calls == [('spin', round(bearing, 4)), ('drive', round(math.hypot(.5, .05), 4)),
+                     ('spin', round(-bearing, 4)),          # back onto the axis
+                     ('drive', .7), ('drive', 1.3)]
 
 
 @pytest.mark.parametrize('normal', [True, False])

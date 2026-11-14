@@ -223,8 +223,15 @@ gz `JointPositionController` (force PID). Everything below lives inside the robo
 `pick_cart` navigates to a staging pose, measures the cart from its four legs in the laser scan (`scripts/cart_legs.py`),
 aligns on the cart axis, drives under it, lifts it, and reverses `staging_distance` (default 1.8 m)
 on the entry axis. Set `navigate_to_staging_pose: false` when RMF already brought the robot to staging.
-Pickup alignment uses `lateral_tolerance` (default 0.04 m predicted lateral error)
-and `yaw_tolerance` (default 0.0523599 rad, 3 degrees), without tighter internal caps.
+Pickup alignment accepts the predicted lateral error at the cart centre within `lateral_tolerance`
+(0.04 m) while far from the cart, and within `pick_lateral_tolerance` (default 0.02 m) once at
+pre-entry: with Nav2's footprint padding and 5 cm cells only 4-9 cm per side remain between the legs, and
+2.4-2.8 cm made the drive under the cart abort with `COLLISION_AHEAD`. The strict limit is only demanded
+near the cart because the spin leaves +-0.7 deg, i.e. +-2.4 cm at the centre from 2 m (1.5 m failed to
+converge for that reason) but +-1.6 cm from 1.3 m. The alignment error (along, lateral, yaw) is taken
+from the legs in the scan, in the robot frame, never from two AMCL poses read at different instants
+(an AMCL update in between moved the robot 3-6 cm / 3 deg against the cart and the pick chased it),
+and the corrections are relative spins/drives. The heading must be within `yaw_tolerance` (default 0.0523599 rad, 3 degrees), without tighter internal caps.
 `place_cart` requires a raised lift and a start within 0.5 m of the destination staging pose
 (`centre - staging_distance * [cos(yaw), sin(yaw)]`, default distance 1.8 m).
 It corrects alignment at staging with the full cart footprint, advances `staging_distance`,
@@ -280,7 +287,7 @@ Straight-motion defaults: speed at most 0.15 m/s; `straight_lateral_limit` 0.03 
 plus lateral corner excursion; `straight_data_timeout` 0.3 s; `straight_lookahead` 0.75 m.
 The configurable ceilings are 0.05 m, 0.0523599 rad (3 degrees), and 0.06 m respectively;
 values above them are rejected. Before movement, the measured cart offset from the segment axis
-must satisfy the pick alignment `lateral_tolerance` and `yaw_tolerance`. During movement, the
+must satisfy `lateral_tolerance` (0.04 m) and `yaw_tolerance`. During movement, the
 guard measures lateral and yaw **drift from the segment's start pose and heading** (the
 robot's own line, not the cart axis: a constant start heading error is not drift), logs the
 start context, the maximum and a signed drift trace once per segment, and reports the measured drift, combined envelope, configured limits, and travelled

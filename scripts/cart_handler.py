@@ -101,7 +101,14 @@ class CartHandler(Node):
         self.correction_lookahead = p('correction_lookahead', 0.5).value
         self.min_correction_clearance = p('min_correction_clearance', 1.3).value
         # Accepted when the lateral offset predicted at the cart centre (offset + distance *
-        # sin(heading error)) is within lateral_tolerance and the heading within yaw_tolerance.
+        # sin(heading error)) is within lateral_tolerance far from the cart (staging) and within
+        # pick_lateral_tolerance at pre-entry, and the heading within yaw_tolerance.
+        # Between the legs there are only ~4-9 cm per side once Nav2's footprint padding and its
+        # 5 cm costmap cells are counted: with 2.4-2.8 cm at the centre (inside the old 4 cm) the
+        # drive under the cart aborted with COLLISION_AHEAD (error 723) in two out of two runs.
+        # 1.5 cm was too strict: the spin's +-0.7 deg alone is +-1.6 cm from pre-entry.
+        self.pick_lateral_tolerance = p('pick_lateral_tolerance', 0.02).value   # [m]
+        # lateral_tolerance also limits the cart's offset when a straight leg starts.
         self.lateral_tolerance = p('lateral_tolerance', 0.04).value   # [m]
         self.yaw_tolerance = p('yaw_tolerance', math.radians(3.0)).value
         self.max_corrections = p('max_corrections', 3).value
@@ -142,13 +149,14 @@ class CartHandler(Node):
         self.place_staging_lateral_tolerance = p(
             'place_staging_lateral_tolerance', max(0.03, self.straight_lateral_limit)).value
         self.place_staging_compensation_limit = p('place_staging_compensation_limit', 0.10).value
-        for value in (self.place_tolerance_xy, self.place_tolerance_yaw,
+        for value in (self.place_tolerance_xy, self.place_tolerance_yaw, self.pick_lateral_tolerance,
                       self.place_carried_yaw_tolerance, self.released_leg_margin,
                       self.place_staging_along_tolerance, self.place_staging_lateral_tolerance,
                       self.place_staging_compensation_limit):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError('placement tolerances must be finite and positive')
         self._motion_fault = False
+        self._cart_in_base = None       # last detection, relative to the robot (see _cart_relative)
         self._pending_goal = None
         self._pending_result = None
         self._footprints = {}
@@ -255,6 +263,7 @@ class CartHandler(Node):
 
     def _detect_cart(self, cart_guess):
         """Cart pose (x, y, yaw) in the global frame measured from its legs in the scan."""
+        self._cart_in_base = None
         t_request = time.monotonic()
         while self._scan is None or self._scan[1] <= t_request:
             if time.monotonic() - t_request > 2.0:
@@ -279,6 +288,7 @@ class CartHandler(Node):
             raise Failed(DOCK.FAILED_TO_DETECT_DOCK,
                          f'cart legs not found near the given pose ({legs} of 4 legs)')
         fx, fy, fyaw = found
+        self._cart_in_base = found
         cart = (rx + c * fx - s * fy, ry + s * fx + c * fy, _wrap(ryaw + fyaw))
         self.get_logger().info(
             f'cart detected from {legs} legs at ({cart[0]:.3f}, {cart[1]:.3f}, '
@@ -366,11 +376,33 @@ class CartHandler(Node):
 
     def _spin_to(self, target_yaw, handle):
         _, _, yaw = self._robot_pose()
-        delta = _wrap(target_yaw - yaw)
+        self._spin_by(target_yaw - yaw, handle)
+
+    def _spin_by(self, delta, handle):
+        delta = _wrap(delta)
         if abs(delta) < 0.005:
             return
         goal = Spin.Goal(target_yaw=float(delta), time_allowance=_duration_msg(15.0))
         self._run(self.spin, goal, handle, 20.0, DOCK.FAILED_TO_CONTROL, 'spin')
+
+    def _cart_relative(self, cart):
+        """Robot pose in the cart frame: (along, lateral, yaw error), along < 0 behind the centre.
+
+        Taken from the detection itself (the legs in the scan, in the robot frame) when there is
+        one: it involves no AMCL. Mixing the map pose of the cart (found with the AMCL pose of
+        the scan) with the AMCL pose read afterwards made the robot jump 3-6 cm and up to 3 deg
+        against the cart whenever AMCL updated in between, which now happens with any spin of
+        0.05 rad (the pick chased those jumps)."""
+        rel, self._cart_in_base = getattr(self, '_cart_in_base', None), None
+        if rel is not None:
+            fx, fy, fyaw = rel
+            c, s = math.cos(fyaw), math.sin(fyaw)
+            return -(fx * c + fy * s), fx * s - fy * c, _wrap(-fyaw)
+        cx, cy, cyaw = cart
+        rx, ry, ryaw = self._robot_pose()
+        ux, uy = math.cos(cyaw), math.sin(cyaw)
+        return ((rx - cx) * ux + (ry - cy) * uy, -(rx - cx) * uy + (ry - cy) * ux,
+                _wrap(ryaw - cyaw))
 
     def _drive(self, distance, handle, what):
         goal = DriveOnHeading.Goal(speed=float(self.approach_speed),
@@ -769,7 +801,6 @@ class CartHandler(Node):
 
         cx, cy = req.dock_pose.pose.position.x, req.dock_pose.pose.position.y
         cyaw = _yaw(req.dock_pose.pose.orientation)
-        ux, uy = math.cos(cyaw), math.sin(cyaw)
         self.get_logger().info(f'pick_cart at ({cx:.2f}, {cy:.2f}, {math.degrees(cyaw):.0f} deg)')
 
         if req.navigate_to_staging_pose:
@@ -795,20 +826,21 @@ class CartHandler(Node):
             feedback(DOCK_FB.INITIAL_PERCEPTION)
             cart = self._detect_cart(cart)
             cx, cy, cyaw = cart
-            ux, uy = math.cos(cyaw), math.sin(cyaw)
             feedback(DOCK_FB.CONTROLLING)
-            rx, ry, ryaw = self._robot_pose()
-            along = (rx - cx) * ux + (ry - cy) * uy          # < 0: behind the cart centre
-            lateral = -(rx - cx) * uy + (ry - cy) * ux
-            yaw_err = _wrap(ryaw - cyaw)
+            along, lateral, yaw_err = self._cart_relative(cart)      # along < 0: behind the centre
             # Where the robot ends after driving straight to the cart centre: what has to clear
             # the legs is that, not the heading alone.
             lateral_end = lateral - along * math.sin(yaw_err)
             self.get_logger().info(f'alignment {attempt}: along {along:.3f} m, '
                                    f'lateral {lateral:.3f} m (at the centre {lateral_end:.3f} m), '
                                    f'yaw {math.degrees(yaw_err):.1f} deg')
-            if abs(lateral_end) <= self.lateral_tolerance and abs(yaw_err) <= self.yaw_tolerance:
-                if along >= -(self.pre_entry_distance + 0.05):
+            # Far from the cart only a coarse check makes sense: the spin leaves +-0.7 deg, which is
+            # +-2.4 cm at the centre from 2 m but +-1.6 cm from 1.3 m, so the strict limit (the one
+            # that keeps the footprint off the legs) is demanded at pre-entry, not at staging.
+            near = along >= -(self.pre_entry_distance + 0.05)
+            lateral_limit = self.pick_lateral_tolerance if near else self.lateral_tolerance
+            if abs(lateral_end) <= lateral_limit and abs(yaw_err) <= self.yaw_tolerance:
+                if near:
                     break
                 if approached:
                     raise Failed(DOCK.FAILED_TO_CONTROL,
@@ -821,28 +853,29 @@ class CartHandler(Node):
                 raise Failed(DOCK.FAILED_TO_CONTROL,
                              f'could not align with the cart (lateral {lateral:.3f} m, '
                              f'yaw {math.degrees(yaw_err):.1f} deg)')
-            if abs(lateral) > self.lateral_tolerance:
+            # Everything below is relative to the cart axis (the robot heading is `heading` in the
+            # cart frame): no absolute yaw is read again, so AMCL cannot move the target meanwhile.
+            heading = yaw_err
+            if abs(lateral) > lateral_limit:
                 # Go to a point on the cart axis a bit ahead, staying clear of the legs;
                 # back up first if there is no room for it.
                 if along + self.correction_lookahead > -self.min_correction_clearance:
-                    self._spin_to(cyaw, handle)
+                    self._spin_by(-heading, handle)
+                    heading = 0.
                     room = along + self.correction_lookahead + self.min_correction_clearance
                     goal = BackUp.Goal(speed=float(self.backout_speed),
                                        time_allowance=_duration_msg(room / self.backout_speed + 10.0))
                     goal.target.x = -float(room)
                     self._run(self.backup, goal, handle, room / self.backout_speed + 15.0,
                               DOCK.FAILED_TO_CONTROL, 'back up to realign')
-                    rx, ry, ryaw = self._robot_pose()
-                    along = (rx - cx) * ux + (ry - cy) * uy
-                target_along = along + self.correction_lookahead
-                qx, qy = cx + target_along * ux, cy + target_along * uy
-                self._spin_to(math.atan2(qy - ry, qx - rx), handle)
-                self._drive(math.hypot(qx - rx, qy - ry), handle, 'alignment drive')
-            self._spin_to(cyaw, handle)
+                bearing = math.atan2(-lateral, self.correction_lookahead)
+                self._spin_by(bearing - heading, handle)
+                heading = bearing
+                self._drive(math.hypot(self.correction_lookahead, lateral), handle, 'alignment drive')
+            self._spin_by(-heading, handle)          # back onto the cart axis
             attempt += 1
 
-        rx, ry, _ = self._robot_pose()
-        distance = -((rx - cx) * ux + (ry - cy) * uy)
+        distance = -along
         if distance <= 0.0:
             raise Failed(DOCK.FAILED_TO_CONTROL, 'robot is already past the cart centre')
         self._drive(distance, handle, 'drive under the cart')
@@ -938,7 +971,10 @@ class CartHandler(Node):
         feedback(DOCK_FB.CONTROLLING)
         target = self._place_target(cart, handle)
         self._align_place(target, handle)
-        self._straight(self.staging_distance, target[2], handle, True)
+        # The start check measures the CARRIED cart's yaw against this axis, so it is the cart's
+        # destination axis, not the robot's target yaw (that one already includes the yaw the cart
+        # was lifted with: 1.9 deg of it plus the spin's error read 3.4 deg and aborted the place).
+        self._straight(self.staging_distance, cart[2], handle, True)
         self._verify_placement(cart)
         self._call(self.lift_down, handle, DOCK.FAILED_TO_CONTROL, 'lift_down')
         self._confirm_lift(False, handle)
