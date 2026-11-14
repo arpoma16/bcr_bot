@@ -39,6 +39,10 @@ Reglas de seguridad ya cerradas, no aflojarlas sin pedirlo: los límites rectos 
 desde el offset inicial del carro; velocidad máx 0.15 m/s, lookahead 0.75 m) solo se pueden subir por parámetro hasta los techos 0.05 m / 3° / 0.06 m
 (antes 0.01 m / 1° / 0.02 m y sin margen); subir los defaults o los techos hay que pedirlo; el guard del scan crudo es independiente del filtro del adapter; una cancelación sin confirmar
 deja un fault latcheado que solo limpia `reset_fault`.
+**Cambios aprobados por el usuario el 2026-11-14** (los defaults y techos de arriba no cambian): la franja del guard ya no es un 0,75 m fijo sino lo que falta del tramo + `straight_end_margin` (0,05 m);
+`straight_cart_body_margin` (0,03 m) deja de contar las patas del propio carro; `place_cart` puede **parar corto** de un obstáculo más allá del destino (`place_stop_short_limit` 0,10 m, `stop_short_brake` 0,02 m);
+un tramo bloqueado frena al instante y **espera hasta `straight_block_wait` (20 s) a que se libere `straight_clear_hold` (1 s) seguido** antes de fallar; las tolerancias de staging del place pasan a 0,08 / 0,05 m.
+El frenado nunca se filtra. Detalle y evidencia: `README.md` y `docs/LIFT_CARTS.md`.
 
 ## Comandos
 
@@ -73,4 +77,5 @@ ros2 launch bcr_bot nav2_factory.launch.py
 - No hay `.claude/` ni `.agents/` con contenido útil (carpetas vacías).
 - Con el carro levantado, cualquier movimiento con chequeo de colisión falla: RMF→Nav2 devolvió status 6 cuatro veces y un `BackUp` directo de 1,6 m dio ABORTED error 714 `COLLISION_AHEAD`.
   `nav2_msgs/BackUp` instalado no tiene `disable_collision_checks`: por eso los tramos staging↔centro los hace `cart_handler` en línea recta, no Nav2.
+- Medido el 2026-11-14 en simulación (3 robots, `recogida_almacen_materiales2`): AMCL con el robot quieto varía 2,4 cm en x y 3,5 cm en y (20 actualizaciones forzadas), pero entre dos lecturas separadas por una espera llegó a cambiar ~8 cm; el carro quedó a 0,5–3,4 cm de su punto en 5 colocaciones y a 9,9 cm en una (sin explicar).
 - Riesgo abierto: la tolerancia de colocación de 0,15 m puede no cubrir el error de AMCL medido (hasta 0,18 m / 0,6°). Hipótesis (nunca confirmada) del fallo de la prueba R3 en `pick_cart`: la guarda comparaba yaw absoluto contra el eje de `map` y rechazaba límites >0,01 m/1°/0,02 m; se relajó a 0,03 m / 2° / 0,04 m con deriva relativa al inicio del tramo. La prueba R4 debe capturar la línea `straight-motion maxima` (nivel info) para medir la desviación real.
