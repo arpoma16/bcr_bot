@@ -3,7 +3,11 @@
 
   pick_cart (nav2_msgs/action/DockRobot)
       dock_pose = cart centre and heading (frame map; the robot drives in along the cart's +x).
-      use_dock_id must be false (there is no cart database). dock_type is ignored.
+      use_dock_id must be false (there is no cart database). dock_type is ignored except for an
+      optional "staging_distance=<metres>" (also in place_cart): the distance between the cart centre
+      and the station's staging point, which replaces the staging_distance parameter for that
+      request. Each station has its own (it is the nav graph's), so it is not a global constant.
+      It must be at least min_staging_distance (the robot cannot stand closer than the rear legs).
       1. NAV_TO_STAGING_POSE: NavigateToPose to staging_distance behind the cart, facing it
          (skipped with navigate_to_staging_pose=false).
       2. INITIAL_PERCEPTION / CONTROLLING: AMCL does not update while the robot stands still
@@ -89,6 +93,14 @@ class Failed(Exception):
         self.code = code
 
 
+class StopShort(Exception):
+    """Internal: a forward segment reached the point where it must stop short of an obstacle."""
+
+
+class PathBlocked(Exception):
+    """Internal: the sweep ahead is occupied; _straight stops and waits for it to clear."""
+
+
 class CartHandler(Node):
     PLACE_ALIGN_ROUNDS = 6      # measure/correct rounds of the place staging alignment
 
@@ -98,6 +110,10 @@ class CartHandler(Node):
         self.global_frame = p('global_frame', 'map').value
         self.base_frame = p('base_frame', 'base_link').value
         self.staging_distance = p('staging_distance', 1.8).value      # behind the cart centre [m]
+        # Closest staging a request may ask for: rear legs at leg_x from the cart centre + the
+        # robot's front (0.45 m, nav2_factory_params footprint) + its 0.05 m padding.
+        self.min_staging_distance = p('min_staging_distance', 1.08).value
+        self._request_staging = None    # staging_distance of the running request (dock_type)
         self.correction_lookahead = p('correction_lookahead', 0.5).value
         self.min_correction_clearance = p('min_correction_clearance', 1.3).value
         # Accepted when the lateral offset predicted at the cart centre (offset + distance *
@@ -136,6 +152,22 @@ class CartHandler(Node):
         self.straight_yaw_limit = p('straight_yaw_limit', math.radians(2.)).value
         self.straight_envelope = p('straight_envelope', 0.04).value
         self.straight_lookahead = p('straight_lookahead', 0.75).value
+        # The leading sweep covers only what is left of the segment plus this margin (never more
+        # than straight_lookahead): an obstacle beyond the end point is not in the way, and the
+        # robot leaves carts a few cm from the station edge, so a fixed 0.75 m blocked every place
+        # next to a wall. 0.05 m covers the 3 cm end-point tolerance with some room.
+        self.straight_end_margin = p('straight_end_margin', 0.05).value
+        # Returns within this distance of the carried cart's own rectangle are its legs, not
+        # obstacles: the outer leg returns sat 0.4 mm inside the rectangle (half_x 0.62), so 1 mm of
+        # laser jitter at a leg made the guard cancel a reverse after 4 cm. The sweep still reaches
+        # the same distance ahead, measured from the true cart edge.
+        self.straight_cart_body_margin = p('straight_cart_body_margin', 0.03).value
+        # An occupied sweep stops the motion at once (never debounced: the stop is the safety
+        # action) and then holds up to straight_block_wait seconds IN TOTAL per segment for the path
+        # to be clear for straight_clear_hold seconds in a row (a person walking by); then it resumes
+        # what is left of the segment. Past the budget the segment fails. 0 = fail at once.
+        self.straight_block_wait = p('straight_block_wait', 20.0).value
+        self.straight_clear_hold = p('straight_clear_hold', 1.0).value
         self.straight_data_timeout = p('straight_data_timeout', 0.3).value
         self.straight_footprint_padding = p('straight_footprint_padding', 0.05).value
         self.place_tolerance_xy = p('place_tolerance_xy', 0.15).value
@@ -144,17 +176,36 @@ class CartHandler(Node):
         # lifts the cart wherever it sits (aligned within the 3 deg pick tolerance) and
         # placement compensates the measured pose, so this matches the pick tolerance.
         self.place_carried_yaw_tolerance = p('place_carried_yaw_tolerance', math.radians(3.)).value
-        self.place_staging_along_tolerance = p('place_staging_along_tolerance', 0.05).value
+        # Staging alignment tolerances are in the map frame, so they must cover AMCL's noise (2-4 cm
+        # at rest, more after a spin with the cart on) while staying under place_tolerance_xy, which
+        # the final placement is still verified against. At 0.05 / 0.03 m the correction loop chased
+        # noise: six ~150 deg spins in a row, each moving the robot 10-16 cm for a 5-9 cm error.
+        self.place_staging_along_tolerance = p('place_staging_along_tolerance', 0.08).value
         # Map-frame staging uncertainty is distinct from relative drift in odom.
         self.place_staging_lateral_tolerance = p(
-            'place_staging_lateral_tolerance', max(0.03, self.straight_lateral_limit)).value
+            'place_staging_lateral_tolerance', max(0.05, self.straight_lateral_limit)).value
         self.place_staging_compensation_limit = p('place_staging_compensation_limit', 0.10).value
+        # place_cart's advance into the station may stop short of an obstacle beyond the target
+        # (a table leg a few cm from where the cart's edge ends) when the cart would still end within
+        # place_stop_short_limit of the target; it keeps straight_end_margin from the obstacle and
+        # triggers the stop stop_short_brake early (cancel latency + braking). The placement is then
+        # verified against place_tolerance_xy / place_tolerance_yaw as always.
+        self.place_stop_short_limit = p('place_stop_short_limit', 0.10).value
+        self.stop_short_brake = p('stop_short_brake', 0.02).value
+        if (not math.isfinite(self.place_stop_short_limit)
+                or not 0. < self.place_stop_short_limit < self.place_tolerance_xy
+                or not math.isfinite(self.stop_short_brake) or not 0. <= self.stop_short_brake <= 0.05):
+            raise ValueError('place_stop_short_limit must be in (0, place_tolerance_xy) and '
+                             'stop_short_brake in [0, 0.05]')
         for value in (self.place_tolerance_xy, self.place_tolerance_yaw, self.pick_lateral_tolerance,
                       self.place_carried_yaw_tolerance, self.released_leg_margin,
                       self.place_staging_along_tolerance, self.place_staging_lateral_tolerance,
                       self.place_staging_compensation_limit):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError('placement tolerances must be finite and positive')
+        if max(self.place_staging_along_tolerance,
+               self.place_staging_lateral_tolerance) >= self.place_tolerance_xy:
+            raise ValueError('staging tolerances must stay below place_tolerance_xy')
         self._motion_fault = False
         self._cart_in_base = None       # last detection, relative to the robot (see _cart_relative)
         self._pending_goal = None
@@ -507,7 +558,8 @@ class CartHandler(Node):
                 return False
         return True
 
-    def _straight(self, distance, axis_yaw, handle, carrying, released_cart=None):
+    def _straight(self, distance, axis_yaw, handle, carrying, released_cart=None,
+                  stop_short_within=None):
         """Nav2 supplies velocity control; an independent guard owns cart clearance.
 
         The footprint lease never authorizes rotation. All checks run before sending
@@ -515,22 +567,62 @@ class CartHandler(Node):
         released_cart: pose of the cart just put down, in the robot frame at the start of a
         segment made without it; the guard then tolerates the returns of its legs below the
         laser's range_min (see _close_returns_are_cart_legs).
+        stop_short_within (forward segments only; place_cart's advance): when the sweep finds an
+        obstacle beyond the target, instead of failing, advance until straight_end_margin from it
+        (stopping stop_short_brake early) if the segment would then fall short of `distance` by at
+        most this many metres; the caller verifies the resulting pose. A farther shortfall, or an
+        obstacle already inside the margin, fails as always. None keeps the plain behaviour.
         """
         speed = self.approach_speed if distance > 0 else self.backout_speed
+        if (stop_short_within is not None
+                and (distance < 0 or not math.isfinite(stop_short_within) or stop_short_within <= 0
+                     or not math.isfinite(self.stop_short_brake) or self.stop_short_brake < 0)):
+            raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid stop-short parameters')
         if (not math.isfinite(distance) or distance == 0 or not 0 < speed <= 0.15
                 or not 0 < self.straight_data_timeout <= 0.3
                 or not 0 < self.straight_lateral_limit <= 0.05
                 or not 0 < self.straight_yaw_limit <= math.radians(3.)
                 or not 0 < self.straight_envelope <= 0.06
-                or not math.isfinite(self.straight_lookahead) or self.straight_lookahead < 0.75):
+                or not math.isfinite(self.straight_lookahead) or self.straight_lookahead < 0.75
+                or not math.isfinite(self.straight_end_margin)
+                or not 0.03 <= self.straight_end_margin <= self.straight_lookahead
+                or not math.isfinite(self.straight_cart_body_margin)
+                or not 0. <= self.straight_cart_body_margin <= 0.05
+                or not math.isfinite(self.straight_block_wait)
+                or not 0. <= self.straight_block_wait <= 60.
+                or not math.isfinite(self.straight_clear_hold)
+                or not 0.2 <= self.straight_clear_hold <= 5.):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid straight-motion safety parameters')
         self._confirm_lift(carrying, handle)
         if not self.straight_footprint.wait_for_service(timeout_sec=self.server_timeout):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'footprint lease service unavailable')
         send = nav_handle = nav_result = None
+
+        def stop_motion():
+            """Cancel the goal in flight and confirm it stopped (else latch the fault)."""
+            nonlocal send, nav_handle, nav_result
+            if nav_handle is None and send is not None:
+                if send.done():
+                    nav_handle = send.result()
+                else:
+                    # Retain cancellation even when acceptance arrives after failure.
+                    send.add_done_callback(lambda f: f.result().cancel_goal_async()
+                                           if f.result().accepted else None)
+                    self._motion_fault = True
+            if nav_handle is not None and nav_handle.accepted:
+                nav_handle.cancel_goal_async()
+                terminal = nav_result or nav_handle.get_result_async()
+                deadline = time.monotonic() + 2.
+                while not terminal.done() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                if not terminal.done():
+                    self._motion_fault = True
+                    self.get_logger().error('motion stop unconfirmed; rejecting further cart goals')
+
         maxima = None
         trace = []       # (travelled, signed lateral drift, yaw drift) every ~0.1 m, logged at the end
         legs_seen = [0]  # scans with sub-range returns accepted as legs of the cart left behind
+        stop_at = [None]    # travelled distance to stop at, short of an obstacle (stop_short_within)
 
         def metrics_text(lateral, yaw, envelope, travelled):
             return (f'lateral={abs(lateral):.3f}m yaw={abs(math.degrees(yaw)):.3f}° '
@@ -666,30 +758,44 @@ class CartHandler(Node):
                         raise Failed(DOCK.FAILED_TO_CONTROL, 'invalid scan or incomplete angular coverage')
                     legs_seen[0] += 1
                 points = cart_legs.scan_points(scan, laser)
-                if geometry.motion_sweep_blocked(points, cart_at_start, data['half_x'], data['half_y'],
-                                                  1 if distance > 0 else -1, self.straight_lookahead):
-                    raise Failed(DOCK.FAILED_TO_CONTROL, 'obstacle in straight-motion leading sweep')
+                # Sweep what is left of the segment plus the end margin, not a fixed distance.
+                body = self.straight_cart_body_margin
+                # Measured from the true cart edge: the strip starts `body` further out (the cart's
+                # own legs are inside that margin), so it is `body` shorter to end at the same place.
+                lookahead = max(0., min(self.straight_lookahead,
+                                        max(0., abs(distance) - travelled) + self.straight_end_margin)
+                                - body)
+                blocker = geometry.sweep_blocker(points, cart_at_start, data['half_x'] + body,
+                                                 data['half_y'] + body, 1 if distance > 0 else -1,
+                                                 lookahead)
+                if blocker is not None:
+                    remaining = max(0., abs(distance) - travelled)
+                    # Distance from the cart's leading edge to the obstacle, and how far the cart
+                    # can still go keeping straight_end_margin from it.
+                    gap = blocker[0] - data['half_x']
+                    allowed = gap - self.straight_end_margin
+                    shortfall = remaining - allowed
+                    if (stop_short_within is None or distance < 0 or allowed < 0.
+                            or shortfall > stop_short_within):
+                        message = ('obstacle in straight-motion leading sweep at cart-frame '
+                                   f'({blocker[0]:+.3f}, {blocker[1]:+.3f}) m, '
+                                   f'travelled {travelled:.3f} m')
+                        if self.straight_block_wait > 0:
+                            raise PathBlocked(message)      # stop, hold, resume or fail (below)
+                        raise Failed(DOCK.FAILED_TO_CONTROL, message)
+                    target = travelled + allowed
+                    if stop_at[0] is None:
+                        self.get_logger().info(
+                            f'straight-motion: obstacle {gap:.3f} m ahead of the cart edge at '
+                            f'cart-frame ({blocker[0]:+.3f}, {blocker[1]:+.3f}) m; stopping '
+                            f'{shortfall:.3f} m short of the target, {self.straight_end_margin:.3f} m '
+                            'from it')
+                    # Keep the most restrictive estimate: scan jitter must not push the stop closer.
+                    stop_at[0] = target if stop_at[0] is None else min(stop_at[0], target)
+                if stop_at[0] is not None and travelled >= stop_at[0] - self.stop_short_brake:
+                    raise StopShort(f'stopped at {travelled:.3f} m of {abs(distance):.3f} m')
                 if check_footprint and not footprints_ready():
                     raise Failed(DOCK.FAILED_TO_CONTROL, 'robot footprint acknowledgment lost')
-
-            # Costmaps acknowledge the actual footprint, not merely service receipt.
-            deadline = time.monotonic() + 3.
-            while not footprints_ready():
-                guard(check_footprint=False)
-                if time.monotonic() > deadline:
-                    raise Failed(DOCK.FAILED_TO_CONTROL, 'costmaps did not acknowledge robot footprint')
-                time.sleep(0.02)
-            guard()
-            client = self.drive if distance > 0 else self.backup
-            if not client.wait_for_server(timeout_sec=self.server_timeout):
-                raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion action server unavailable')
-            guard()
-            timeout = abs(distance) / speed + 15.
-            goal_type = DriveOnHeading if distance > 0 else BackUp
-            goal = goal_type.Goal(speed=float(speed), time_allowance=_duration_msg(timeout - 5.))
-            goal.target.x = float(distance)
-            send = client.send_goal_async(goal)
-            self._pending_goal, self._pending_result = send, None
 
             def monitored_wait(future, timeout):
                 deadline = time.monotonic() + timeout
@@ -700,39 +806,103 @@ class CartHandler(Node):
                     time.sleep(0.02)
                 guard()
 
-            monitored_wait(send, self.server_timeout)
-            nav_handle = send.result()
-            if not nav_handle.accepted:
-                raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion goal rejected')
-            nav_result = nav_handle.get_result_async()
-            self._pending_result = nav_result
-            monitored_wait(nav_result, timeout)
-            outcome = nav_result.result()
-            if outcome.status != 4:
-                raise Failed(DOCK.FAILED_TO_CONTROL,
-                             f'straight motion failed (status {outcome.status}, '
-                             f'error_code {getattr(outcome.result, "error_code", "?")})')
+            def wait_until_clear(reason, used):
+                """Hold (the goal is already cancelled) until the sweep has been clear for
+                straight_clear_hold s in a row; `used` + this wait may not pass straight_block_wait.
+                Every other guard check keeps running meanwhile. Returns the total waited."""
+                started = time.monotonic()
+                clear_since = None
+                self.get_logger().info(
+                    f'straight-motion: path blocked ({reason}); holding up to '
+                    f'{self.straight_block_wait - used:.0f} s for it to clear')
+                while True:
+                    try:
+                        guard()
+                        now = time.monotonic()
+                        if clear_since is None:
+                            clear_since = now
+                        if now - clear_since >= self.straight_clear_hold:
+                            self.get_logger().info(
+                                f'straight-motion: path clear after {now - started:.1f} s; resuming')
+                            return used + now - started
+                    except PathBlocked as still_blocked:
+                        clear_since = None
+                        reason = str(still_blocked)
+                    if used + time.monotonic() - started > self.straight_block_wait:
+                        raise Failed(DOCK.FAILED_TO_CONTROL,
+                                     f'path still blocked after {self.straight_block_wait:.0f} s: {reason}')
+                    time.sleep(0.02)
+
+            client = self.drive if distance > 0 else self.backup
+            waited, first = 0., True
+            while True:
+                try:
+                    # Costmaps acknowledge the actual footprint, not merely service receipt.
+                    deadline = time.monotonic() + 3.
+                    while not footprints_ready():
+                        guard(check_footprint=False)
+                        if time.monotonic() > deadline:
+                            raise Failed(DOCK.FAILED_TO_CONTROL,
+                                         'costmaps did not acknowledge robot footprint')
+                        time.sleep(0.02)
+                    guard()
+                    if not client.wait_for_server(timeout_sec=self.server_timeout):
+                        raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion action server unavailable')
+                    guard()
+                    # The whole segment at first; after a hold, what is left of it.
+                    command = distance
+                    if not first:
+                        command = distance - geometry.local_pose(self._motion_pose(), origin)[0]
+                        if abs(command) <= 0.03:
+                            break           # it had already got there: the endpoint check below
+                    first = False
+                    timeout = abs(command) / speed + 15.
+                    goal_type = DriveOnHeading if distance > 0 else BackUp
+                    goal = goal_type.Goal(speed=float(speed), time_allowance=_duration_msg(timeout - 5.))
+                    goal.target.x = float(command)
+                    send = client.send_goal_async(goal)
+                    self._pending_goal, self._pending_result = send, None
+                    monitored_wait(send, self.server_timeout)
+                    nav_handle = send.result()
+                    if not nav_handle.accepted:
+                        raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion goal rejected')
+                    nav_result = nav_handle.get_result_async()
+                    self._pending_result = nav_result
+                    monitored_wait(nav_result, timeout)
+                    outcome = nav_result.result()
+                    if outcome.status != 4:
+                        raise Failed(DOCK.FAILED_TO_CONTROL,
+                                     f'straight motion failed (status {outcome.status}, '
+                                     f'error_code {getattr(outcome.result, "error_code", "?")})')
+                    break
+                except PathBlocked as blocked:
+                    stop_motion()
+                    send = nav_handle = nav_result = None
+                    self._pending_goal = self._pending_result = None
+                    # Diagnostics: where the robot stopped (odom along the segment, map pose), to
+                    # compare with where it is after the hold and where the segment ends.
+                    self.get_logger().info(
+                        'straight-motion: stopped at odom along '
+                        f'{geometry.local_pose(self._motion_pose(), origin)[0]:.3f} m of '
+                        f'{distance:.3f} m, map pose {self._pose_text()}')
+                    waited = wait_until_clear(str(blocked), waited)
+                    here = geometry.local_pose(self._motion_pose(), origin)[0]
+                    self.get_logger().info(
+                        f'straight-motion: resuming with {distance - here:.3f} m left (odom along '
+                        f'{here:.3f} m), map pose {self._pose_text()}')
             along, _, _ = geometry.local_pose(self._motion_pose(), origin)
+            self.get_logger().info(
+                f'straight-motion: ended at odom along {along:.3f} m of {distance:.3f} m, '
+                f'map pose {self._pose_text()}')
             if abs(along - distance) > 0.03:
                 raise Failed(DOCK.FAILED_TO_CONTROL, 'straight-motion endpoint outside 3 cm tolerance')
         except Exception as exc:
-            if nav_handle is None and send is not None:
-                if send.done():
-                    nav_handle = send.result()
-                else:
-                    # Retain cancellation even when acceptance arrives after failure.
-                    send.add_done_callback(lambda f: f.result().cancel_goal_async()
-                                           if f.result().accepted else None)
-                    self._motion_fault = True
-            if nav_handle is not None and nav_handle.accepted:
-                nav_handle.cancel_goal_async()
-                terminal = nav_result or nav_handle.get_result_async()
-                deadline = time.monotonic() + 2.
-                while not terminal.done() and time.monotonic() < deadline:
-                    time.sleep(0.02)
-                if not terminal.done():
-                    self._motion_fault = True
-                    self.get_logger().error('motion stop unconfirmed; rejecting further cart goals')
+            stop_motion()
+            if isinstance(exc, StopShort):
+                # The goal was cancelled above and its stop confirmed (or the fault latched); the
+                # caller verifies where the cart ended up, so no endpoint check here.
+                self.get_logger().info(f'straight-motion: {exc}')
+                return
             if isinstance(exc, (Failed, Canceled)):
                 raise
             raise Failed(DOCK.FAILED_TO_CONTROL, f'straight-motion guard failed: {exc}') from exc
@@ -764,6 +934,35 @@ class CartHandler(Node):
     def _place(self, handle):
         return self._dock_action(handle, self._do_place, 'place_cart')
 
+    def _pose_text(self):
+        x, y, yaw = self._robot_pose()
+        return f'({x:.3f}, {y:.3f}, {math.degrees(yaw):.1f} deg)'
+
+    def _staging(self):
+        """Staging distance of the running request: its dock_type's, else the parameter."""
+        return getattr(self, '_request_staging', None) or self.staging_distance
+
+    def _use_request_staging(self, req):
+        """Read "staging_distance=<m>" from dock_type; no value keeps the parameter."""
+        self._request_staging = None
+        text = str(getattr(req, 'dock_type', '') or '').strip()
+        if not text:
+            return
+        key, _, value = text.partition('=')
+        try:
+            distance = float(value)
+        except ValueError:
+            distance = math.nan
+        if key.strip() != 'staging_distance' or not math.isfinite(distance):
+            raise Failed(DOCK.DOCK_NOT_VALID,
+                         f'dock_type must be "staging_distance=<metres>", got "{text}"')
+        if distance < self.min_staging_distance:
+            raise Failed(DOCK.DOCK_NOT_VALID,
+                         f'staging_distance {distance:.2f} m is closer than the robot can stand '
+                         f'to the cart legs (min_staging_distance {self.min_staging_distance:.2f} m)')
+        self._request_staging = distance
+        self.get_logger().info(f'staging_distance for this request: {distance:.2f} m')
+
     def _dock_action(self, handle, execute, name):
         result = DockRobot.Result(success=False)
         with self._busy:
@@ -773,6 +972,7 @@ class CartHandler(Node):
                 handle.publish_feedback(DOCK_FB(state=state,
                                                 docking_time=_duration_msg(time.monotonic() - t0)))
             try:
+                self._use_request_staging(handle.request)
                 execute(handle.request, handle, feedback)
             except Canceled:
                 result.error_msg = 'canceled'
@@ -784,6 +984,8 @@ class CartHandler(Node):
                 handle.abort()
                 self.get_logger().error(f'{name} failed: {exc}')
                 return result
+            finally:
+                self._request_staging = None
             result.success = True
             handle.succeed()
             self.get_logger().info(f'{name} done in {time.monotonic() - t0:.1f} s')
@@ -809,7 +1011,7 @@ class CartHandler(Node):
             staging.header.frame_id = self.global_frame
             staging.header.stamp = self.get_clock().now().to_msg()
             staging.pose.position.x, staging.pose.position.y, _ = geometry.staging_pose(
-                (cx, cy, cyaw), self.staging_distance)
+                (cx, cy, cyaw), self._staging())
             staging.pose.orientation = req.dock_pose.pose.orientation
             self._run(self.nav, NavigateToPose.Goal(pose=staging), handle,
                       float(req.max_staging_time), DOCK.FAILED_TO_STAGE, 'navigate to staging pose')
@@ -881,7 +1083,7 @@ class CartHandler(Node):
         self._drive(distance, handle, 'drive under the cart')
         self._call(self.lift_up, handle, DOCK.FAILED_TO_CONTROL, 'lift_up')
         self._confirm_lift(True, handle)
-        self._straight(-self.staging_distance, cyaw, handle, True)
+        self._straight(-self._staging(), cyaw, handle, True)
 
     # -------------------------------------------------------------- place_cart
 
@@ -902,8 +1104,8 @@ class CartHandler(Node):
                          f'{math.degrees(self.place_carried_yaw_tolerance):.1f} deg of robot '
                          f'(cart: {seen})')
         target = geometry.placement_robot_pose(cart, local)
-        nominal = geometry.staging_pose(cart, self.staging_distance)
-        corrected = geometry.staging_pose(target, self.staging_distance)
+        nominal = geometry.staging_pose(cart, self._staging())
+        corrected = geometry.staging_pose(target, self._staging())
         if (math.hypot(corrected[0] - nominal[0], corrected[1] - nominal[1])
                 > self.place_staging_compensation_limit):
             raise Failed(DOCK.DOCK_NOT_VALID, 'cart offset exceeds staging compensation limit')
@@ -917,7 +1119,7 @@ class CartHandler(Node):
             raise Failed(DOCK.FAILED_TO_CONTROL, 'cart outside destination tolerance; refusing to lower')
 
     def _align_place(self, cart, handle):
-        staging = geometry.staging_pose(cart, self.staging_distance)
+        staging = geometry.staging_pose(cart, self._staging())
         # Small staging corrections retain the full cart footprint. Never use the
         # leased footprint to rotate, or drive a lateral correction inside a station.
         limits = (f'limits {self.place_staging_along_tolerance:.3f} m along / '
@@ -929,10 +1131,15 @@ class CartHandler(Node):
         # pose by up to 6 cm after a check made while facing the staging point). So every round
         # settles and measures; a measurement within tolerance while not yet facing the cart only
         # triggers the final spin, and the next round measures again in that condition.
+        # An error ALONG the axis, with the robot already facing it and the lateral error in
+        # tolerance, is corrected by a short guarded straight move without turning around: the
+        # spin toward the staging point and back was what moved the robot more than it corrected.
+        # (No controller keeps a straight move on the line, so lateral errors still need the
+        # spin + drive below.)
         facing, pose = False, (0., 0.)
         for attempt in range(self.PLACE_ALIGN_ROUNDS):
             self._settle_localization(handle)
-            rx, ry, _ = self._robot_pose()
+            rx, ry, ryaw = self._robot_pose()
             pose = geometry.local_pose((rx, ry, cart[2]), staging)
             distance = math.hypot(pose[0], pose[1])
             self.get_logger().info(
@@ -946,6 +1153,12 @@ class CartHandler(Node):
                 if facing:
                     return
                 self._spin_to(cart[2], handle)
+                facing = True
+                continue
+            if (abs(pose[1]) <= self.place_staging_lateral_tolerance
+                    and abs(_wrap(ryaw - cart[2])) <= self.yaw_tolerance):
+                # pose[0] > 0: the robot is ahead of the staging (toward the cart): back up.
+                self._straight(-pose[0], cart[2], handle, True)
                 facing = True
                 continue
             facing = False
@@ -974,12 +1187,13 @@ class CartHandler(Node):
         # The start check measures the CARRIED cart's yaw against this axis, so it is the cart's
         # destination axis, not the robot's target yaw (that one already includes the yaw the cart
         # was lifted with: 1.9 deg of it plus the spin's error read 3.4 deg and aborted the place).
-        self._straight(self.staging_distance, cart[2], handle, True)
+        self._straight(self._staging(), cart[2], handle, True,
+                       stop_short_within=self.place_stop_short_limit)
         self._verify_placement(cart)
         self._call(self.lift_down, handle, DOCK.FAILED_TO_CONTROL, 'lift_down')
         self._confirm_lift(False, handle)
         # The cart now stands where the robot carried it: its legs are what the robot leaves between.
-        self._straight(-self.staging_distance, target[2], handle, False,
+        self._straight(-self._staging(), target[2], handle, False,
                        released_cart=self._placement_geometry)
 
     # --------------------------------------------------------------- drop_cart

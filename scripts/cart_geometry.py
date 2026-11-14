@@ -49,10 +49,16 @@ def strip_blocked(points, cart_in_base, strip):
 
 
 def motion_sweep_blocked(points, cart_in_base, half_x, half_y, direction, lookahead):
-    """Exact extrusion along robot x, excluding the currently occupied rectangle.
+    """True when sweep_blocker finds a point (see it)."""
+    return sweep_blocker(points, cart_in_base, half_x, half_y, direction, lookahead) is not None
 
-    For an aligned cart this is precisely leading_strip. A rotated cart also
-    sweeps a narrow wedge along one side; ignoring it would miss collisions.
+
+def sweep_blocker(points, cart_in_base, half_x, half_y, direction, lookahead):
+    """First point in the exact extrusion along robot x, as (x, y) in the cart frame, else None.
+
+    The currently occupied rectangle is excluded. For an aligned cart this is precisely
+    leading_strip. A rotated cart also sweeps a narrow wedge along one side; ignoring it would
+    miss collisions.
     """
     vx, vy = direction * math.cos(cart_in_base[2]), -direction * math.sin(cart_in_base[2])
     for px, py in points:
@@ -69,8 +75,8 @@ def motion_sweep_blocked(points, cart_in_base, half_x, half_y, direction, lookah
                 a, b = (value - extent) / velocity, (value + extent) / velocity
                 lo, hi = max(lo, min(a, b)), min(hi, max(a, b))
         if lo <= hi:
-            return True
-    return False
+            return (x, y)
+    return None
 
 
 def deviation_metrics(pose, axis, half_x, half_y):

@@ -245,6 +245,59 @@ def test_staging_alignment_corrects_again_when_the_final_spin_shifts_the_pose(ha
     assert node._spin_to.call_count == 3
 
 
+def _axial_node(m, poses):
+    node = object.__new__(m.CartHandler)
+    node.staging_distance = 1.8
+    node.place_staging_along_tolerance, node.place_staging_lateral_tolerance = .08, .05
+    node.yaw_tolerance = math.radians(3.)
+    poses = iter(poses)
+    node._robot_pose = lambda: next(poses)
+    node._settle_localization, node._drive, node._spin_to = Mock(), Mock(), Mock()
+    node._straight = Mock()
+    node.get_logger = lambda: NS(info=Mock())
+    return node
+
+
+@pytest.mark.parametrize('along', [.12, -.12])
+def test_along_error_facing_the_axis_is_corrected_without_turning_around(handler_module, along):
+    m = handler_module
+    # Cart at (1.8, 0) -> staging (0, 0). Facing the cart, on the line, 12 cm off along it: one short
+    # straight move (back if ahead of the staging, forward if short of it), no spin, no Nav2 drive.
+    node = _axial_node(m, [(along, .01, 0.), (.0, .01, 0.)])
+    node._align_place((1.8, 0., 0.), NS())
+    node._straight.assert_called_once()
+    assert node._straight.call_args.args[0] == pytest.approx(-along)
+    assert node._straight.call_args.args[3] is True            # carrying: the cart footprint is leased
+    node._spin_to.assert_not_called()
+    node._drive.assert_not_called()
+
+
+def test_axial_correction_needs_to_be_facing_the_axis(handler_module):
+    m = handler_module
+    # 10 deg off the axis: a straight move would not follow the line, so the usual spin + drive.
+    node = _axial_node(m, [(.12, .0, math.radians(10.)), (.0, .0, 0.), (.0, .0, 0.)])
+    node._align_place((1.8, 0., 0.), NS())
+    node._straight.assert_not_called()
+    assert node._drive.call_count == 1 and node._spin_to.call_count >= 1
+
+
+def test_lateral_error_still_needs_the_spin_and_drive(handler_module):
+    m = handler_module
+    node = _axial_node(m, [(.0, .09, 0.), (.0, .0, 0.), (.0, .0, 0.)])
+    node._align_place((1.8, 0., 0.), NS())
+    node._straight.assert_not_called()
+    assert node._drive.call_count == 1
+
+
+def test_error_inside_the_new_tolerances_is_accepted_without_moving(handler_module):
+    m = handler_module
+    # 7 cm along / 4 cm lateral: inside the AMCL-noise-sized tolerances (used to chase it with spins).
+    node = _axial_node(m, [(.07, .04, 0.), (.07, .04, 0.)])
+    node._align_place((1.8, 0., 0.), NS())
+    node._straight.assert_not_called()
+    node._drive.assert_not_called()
+
+
 @pytest.mark.parametrize('error,accepted', [(math.radians(2.), True), (math.radians(4.), False)])
 def test_placement_yaw_tolerance(handler_module, error, accepted):
     m = handler_module

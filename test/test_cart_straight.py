@@ -23,6 +23,9 @@ def rig(handler_module, monkeypatch):
     node.approach_speed = node.backout_speed = .15
     node.straight_lateral_limit, node.straight_yaw_limit = .03, math.radians(2.)
     node.straight_envelope, node.straight_lookahead = .04, .75
+    node.straight_end_margin, node.straight_cart_body_margin = .05, .03
+    node.place_stop_short_limit, node.stop_short_brake = .10, .02
+    node.straight_block_wait, node.straight_clear_hold = 0., 1.     # hold disabled: fail at once
     node.straight_data_timeout, node.straight_footprint_padding = .3, .05
     node.server_timeout, node.staging_distance = 1., 1.8
     node.place_tolerance_xy, node.place_tolerance_yaw = .15, math.radians(3.)
@@ -125,6 +128,225 @@ def test_active_motion_is_canceled_on_guard_failure(rig, failure):
         rig.node._straight(1.8, 0., rig.handle, True)
     rig.action_handles[0].cancel_goal_async.assert_called_once()
     assert rig.released == [True]
+
+
+# The leading sweep covers what is left of the segment plus straight_end_margin (0.05 m), not a
+# fixed 0.75 m: carts are left a few cm from a wall, and the wall is not in the way of the motion.
+# The carried cart's leading edge is at 0.62 m from the robot (half_x), straight ahead is scan[180].
+
+def test_obstacle_beyond_the_end_point_does_not_block(rig):
+    rig.scan.ranges[180] = .62 + .30 + .15          # wall 15 cm past where the cart will stop
+    rig.node._straight(.3, 0., rig.handle, True)
+    assert rig.events == [('drive', .3)]
+
+
+def test_obstacle_inside_the_remaining_motion_blocks(rig):
+    rig.scan.ranges[180] = .62 + .20                # 20 cm ahead of the edge, motion is 30 cm
+    with pytest.raises(rig.m.Failed, match='leading sweep'):
+        rig.node._straight(.3, 0., rig.handle, True)
+    assert rig.events == []                         # refused before moving
+
+
+def test_obstacle_inside_the_end_margin_blocks(rig):
+    rig.scan.ranges[180] = .62 + .30 + .03          # 3 cm past the end point: within the 5 cm margin
+    with pytest.raises(rig.m.Failed, match='leading sweep'):
+        rig.node._straight(.3, 0., rig.handle, True)
+
+
+@pytest.mark.parametrize('margin', [0., .02, math.nan, 1.])
+def test_invalid_end_margin_is_rejected(rig, margin):
+    rig.node.straight_end_margin = margin
+    with pytest.raises(rig.m.Failed, match='safety parameters'):
+        rig.node._straight(.3, 0., rig.handle, True)
+
+
+# The carried cart's own legs sit at the edge of its rectangle (0.4 mm inside half_x in the sim):
+# returns within straight_cart_body_margin (0.03 m) of that rectangle are the cart, not obstacles.
+
+def test_leg_return_just_outside_the_cart_rectangle_does_not_block(rig):
+    rig.scan.ranges[180] = .62 + .009               # 9 mm past the edge, like the leg seen at -0.629
+    rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.events == [('drive', 1.8)]
+
+
+def test_obstacle_just_past_the_body_margin_blocks(rig):
+    rig.scan.ranges[180] = .62 + .04                # 4 cm past the edge: beyond the 3 cm margin
+    with pytest.raises(rig.m.Failed, match='leading sweep'):
+        rig.node._straight(1.8, 0., rig.handle, True)
+
+
+def test_blocking_point_is_reported_in_the_cart_frame(rig):
+    rig.scan.ranges[180] = .80
+    with pytest.raises(rig.m.Failed) as error:
+        rig.node._straight(1.8, 0., rig.handle, True)
+    assert 'cart-frame (+0.800, +0.000) m' in str(error.value)
+    assert 'travelled 0.000 m' in str(error.value)
+
+
+def test_body_margin_does_not_shorten_the_end_of_the_sweep(rig):
+    # Same reach as without the margin: motion 0.3 m + 0.05 m end margin from the true edge.
+    rig.scan.ranges[180] = .62 + .34                # 0.34 m past the edge: inside 0.30 + 0.05
+    with pytest.raises(rig.m.Failed, match='leading sweep'):
+        rig.node._straight(.3, 0., rig.handle, True)
+    rig.scan.ranges[180] = .62 + .36                # 0.36 m past the edge: outside
+    rig.node._straight(.3, 0., rig.handle, True)
+
+
+@pytest.mark.parametrize('margin', [-.01, .06, math.nan])
+def test_invalid_body_margin_is_rejected(rig, margin):
+    rig.node.straight_cart_body_margin = margin
+    with pytest.raises(rig.m.Failed, match='safety parameters'):
+        rig.node._straight(.3, 0., rig.handle, True)
+
+
+# --- stop short of an obstacle beyond the target (place_cart's advance) ---------------------------
+
+def _creep(rig, step=.01):
+    """Once the goal is sent the robot advances `step` per guard cycle and the obstacle (scan[180])
+    gets closer by the same amount, as it does in the robot frame."""
+    def motion_pose():
+        if rig.events:
+            rig.pose[0] += step
+            rig.scan.ranges[180] -= step
+            rig.node._scan = rig.scan, rig.clock.now
+        return tuple(rig.pose)
+    rig.node._motion_pose = motion_pose
+    rig.state.after_send = lambda: None
+    rig.state.complete_after_send = False
+
+
+def test_advance_stops_short_of_a_leg_just_beyond_the_target(rig):
+    _creep(rig)
+    rig.scan.ranges[180] = .62 + .9 + .02           # 2 cm past where the cart's edge would end
+    rig.node._straight(.9, 0., rig.handle, True, stop_short_within=.10)
+    assert .80 < rig.pose[0] < .90                  # stopped short of the 0.9 m target
+    rig.action_handles[0].cancel_goal_async.assert_called_once()
+    assert not rig.node._motion_fault
+    assert .05 <= rig.scan.ranges[180] - .62 <= .09  # ~5 cm kept from the leg (plus braking slack)
+
+
+def test_same_leg_fails_without_stop_short(rig):
+    _creep(rig)
+    rig.scan.ranges[180] = .62 + .9 + .02
+    with pytest.raises(rig.m.Failed, match='leading sweep'):
+        rig.node._straight(.9, 0., rig.handle, True)
+
+
+def test_stop_short_refuses_when_the_shortfall_is_too_big(rig):
+    _creep(rig)
+    rig.scan.ranges[180] = .62 + .5                 # the leg is 0.5 m ahead of the edge, target 0.9 m
+    with pytest.raises(rig.m.Failed, match='leading sweep'):
+        rig.node._straight(.9, 0., rig.handle, True, stop_short_within=.10)
+    assert rig.events == []                         # refused before moving
+
+
+def test_stop_short_refuses_an_obstacle_already_inside_the_margin(rig):
+    _creep(rig)
+    rig.scan.ranges[180] = .62 + .04                # 4 cm from the edge: less than the 5 cm margin
+    with pytest.raises(rig.m.Failed, match='leading sweep'):
+        rig.node._straight(.9, 0., rig.handle, True, stop_short_within=.10)
+    assert rig.events == []
+
+
+def test_stop_short_only_applies_to_forward_segments(rig):
+    with pytest.raises(rig.m.Failed, match='stop-short'):
+        rig.node._straight(-.9, 0., rig.handle, True, stop_short_within=.10)
+
+
+# --- an occupied sweep stops the motion, holds up to straight_block_wait, then resumes ----------------
+
+def _person(rig, blocked):
+    """`blocked(now)`: a person stands 0.3 m ahead of the cart's edge. The scan stays fresh."""
+    base = rig.node._motion_pose
+
+    def motion_pose():
+        rig.node._scan = rig.scan, rig.clock.now
+        rig.scan.ranges[180] = .62 + .3 if blocked(rig.clock.now) else math.inf
+        return base()
+    rig.node._motion_pose = motion_pose
+
+
+def test_a_person_walking_by_pauses_the_segment_and_it_resumes(rig):
+    rig.node.straight_block_wait = 20.
+    seen = {}
+
+    def step_in():
+        rig.pose[0] += .5                       # 0.5 m done when the person steps in
+        seen['t'] = rig.clock.now
+        rig.state.after_send = None             # the resumed goal runs to the end
+    rig.state.after_send, rig.state.complete_after_send = step_in, False
+    _person(rig, lambda now: 't' in seen and now < seen['t'] + 3.)      # gone after 3 s
+    rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.events == [('drive', 1.8), ('drive', pytest.approx(1.3))]    # then what was left
+    assert rig.pose[0] == pytest.approx(1.8)
+    assert 4. <= rig.clock.now - seen['t'] < 10.                            # 3 s away + 1 s clear
+    rig.action_handles[0].cancel_goal_async.assert_called_once()           # stopped at once
+    rig.action_handles[1].cancel_goal_async.assert_not_called()
+    assert rig.released == [True] and not rig.node._motion_fault
+
+
+def test_a_person_who_stays_fails_the_segment_after_the_hold(rig):
+    rig.node.straight_block_wait = 20.
+    seen = {}
+    rig.state.after_send = lambda: seen.setdefault('t', rig.clock.now)
+    rig.state.complete_after_send = False
+    _person(rig, lambda now: 't' in seen)
+    with pytest.raises(rig.m.Failed, match='still blocked after 20 s'):
+        rig.node._straight(1.8, 0., rig.handle, True)
+    assert 20. <= rig.clock.now - seen['t'] < 22.
+    rig.action_handles[0].cancel_goal_async.assert_called_once()
+    assert rig.released == [True] and not rig.node._motion_fault
+
+
+def test_the_path_must_stay_clear_for_the_whole_hold_time(rig):
+    rig.node.straight_block_wait = 20.
+    seen = {}
+
+    def step_in():
+        seen['t'] = rig.clock.now
+        rig.state.after_send = None
+    rig.state.after_send, rig.state.complete_after_send = step_in, False
+    # there for 2 s, gone 0.5 s (less than the 1 s hold: not enough), back until 4 s, gone for good
+    _person(rig, lambda now: 't' in seen and (now - seen['t'] < 2. or 2.5 <= now - seen['t'] < 4.))
+    rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.clock.now - seen['t'] >= 5.
+    assert len(rig.events) == 2
+
+
+def test_cancel_is_honoured_during_the_hold(rig):
+    rig.node.straight_block_wait = 20.
+    seen = {}
+    rig.state.after_send = lambda: seen.setdefault('t', rig.clock.now)
+    rig.state.complete_after_send = False
+    _person(rig, lambda now: 't' in seen)
+    waiting = rig.node._motion_pose
+
+    def with_cancel():
+        if 't' in seen and rig.clock.now - seen['t'] >= 2.:
+            rig.handle.is_cancel_requested = True
+        return waiting()
+    rig.node._motion_pose = with_cancel
+    with pytest.raises(rig.m.Canceled):
+        rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.clock.now - seen['t'] < 5.
+
+
+def test_blocked_before_starting_waits_then_sends_the_whole_segment(rig):
+    rig.node.straight_block_wait = 20.
+    t0 = rig.clock.now
+    _person(rig, lambda now: now - t0 < 2.)
+    rig.node._straight(1.8, 0., rig.handle, True)
+    assert rig.events == [('drive', 1.8)]
+    assert rig.clock.now - t0 >= 3.
+
+
+@pytest.mark.parametrize('attr,value', [('straight_block_wait', 61.), ('straight_block_wait', -1.),
+                                        ('straight_block_wait', math.nan), ('straight_clear_hold', .1),
+                                        ('straight_clear_hold', 6.)])
+def test_invalid_hold_parameters_are_rejected(rig, attr, value):
+    setattr(rig.node, attr, value)
+    with pytest.raises(rig.m.Failed, match='safety parameters'):
+        rig.node._straight(.3, 0., rig.handle, True)
 
 
 def _set_measured_cart_pose(rig, pose):

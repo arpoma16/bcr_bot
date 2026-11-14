@@ -232,6 +232,11 @@ converge for that reason) but +-1.6 cm from 1.3 m. The alignment error (along, l
 from the legs in the scan, in the robot frame, never from two AMCL poses read at different instants
 (an AMCL update in between moved the robot 3-6 cm / 3 deg against the cart and the pick chased it),
 and the corrections are relative spins/drives. The heading must be within `yaw_tolerance` (default 0.0523599 rad, 3 degrees), without tighter internal caps.
+The staging distance is per station: a request may carry `dock_type: "staging_distance=<metres>"` (the
+fleet manager sets it from the nav graph, the distance between the cart centre and the station's `_staging`
+vertex) and it replaces `staging_distance` for that request only; without it the parameter (1.8 m) applies.
+It must be at least `min_staging_distance` (default 1.08 m = rear leg 0.58 m + robot half-length 0.45 m +
+0.05 m padding: closer, the robot's front would stand inside the legs) or the request fails with `DOCK_NOT_VALID`.
 `place_cart` requires a raised lift and a start within 0.5 m of the destination staging pose
 (`centre - staging_distance * [cos(yaw), sin(yaw)]`, default distance 1.8 m).
 It corrects alignment at staging with the full cart footprint, advances `staging_distance`,
@@ -255,8 +260,8 @@ Placement parameters (lengths in metres, angles in radians):
 | `place_tolerance_yaw` | `0.05235987755982989` (3 degrees) | Maximum estimated cart-heading error before lowering |
 | `place_carried_yaw_tolerance` | `0.05235987755982989` (3 degrees) | Maximum yaw of the carried cart relative to the robot that `place_cart` accepts |
 | `released_leg_margin` | `0.10` | While backing out of a cart just put down, a laser return below `range_min` is accepted only if it points within this distance of a leg centre of that cart |
-| `place_staging_along_tolerance` | `0.05` | Accepted along-axis error at staging |
-| `place_staging_lateral_tolerance` | `max(0.03, straight_lateral_limit)`; normally `0.03` | Accepted lateral staging error |
+| `place_staging_along_tolerance` | `0.08` | Accepted along-axis error at staging (map frame, so it must cover AMCL noise; must stay below `place_tolerance_xy`). An along error with the robot already facing the axis and the lateral error in tolerance is corrected by one short guarded straight move, without turning around; lateral errors still use spin + drive |
+| `place_staging_lateral_tolerance` | `max(0.05, straight_lateral_limit)`; normally `0.05` | Accepted lateral staging error (same rules) |
 | `place_staging_compensation_limit` | `0.10` | Maximum difference between compensated and nominal staging |
 
 These placement tolerances must be finite and positive. The 3 cm staging lateral default
@@ -285,6 +290,30 @@ missing confirmation latches a fault.
 Straight-motion defaults: speed at most 0.15 m/s; `straight_lateral_limit` 0.03 m;
 `straight_yaw_limit` 0.0349066 rad (2 degrees); combined `straight_envelope` 0.04 m for centre drift
 plus lateral corner excursion; `straight_data_timeout` 0.3 s; `straight_lookahead` 0.75 m.
+The leading sweep is at most `straight_lookahead` but shrinks to what is left of the segment plus
+`straight_end_margin` (default 0.05 m, accepted 0.03 m to the lookahead): an obstacle past the end point
+does not block, so a cart can be left a few cm from a wall or the station edge. An obstacle inside the
+remaining motion or within that margin of the end point still blocks.
+`straight_cart_body_margin` (default 0.03 m, ceiling 0.05 m, 0 disables) widens the carried cart's own
+rectangle in the sweep: its outer leg returns sit at the rectangle's edge (0.4 mm inside in the sim) and
+laser jitter made the guard cancel a reverse after 4 cm. The sweep still ends at the same distance from the
+true cart edge. A blocked sweep now reports the point, in the cart frame, and the distance travelled.
+`place_cart`'s advance into the station may **stop short** of an obstacle beyond the target (e.g. a table
+leg a couple of cm past where the cart's edge ends): when the sweep finds one, the cart keeps advancing
+until `straight_end_margin` (0.05 m) from it, stopping `stop_short_brake` (0.02 m) early for the cancel and
+braking, provided it would then end within `place_stop_short_limit` (0.10 m, must stay below
+`place_tolerance_xy`) of the target; otherwise, or if the obstacle is already inside the margin, it fails as
+before. The stop skips the 3 cm endpoint check, and `place_cart` then verifies the real pose against
+`place_tolerance_xy` / `place_tolerance_yaw` and refuses to lower the lift if it is outside. Forward
+segments only. Offline tests do not measure the real braking distance: validate it in the simulation.
+An occupied sweep (a person walking by) **stops the motion at once** (the stop is never debounced), and then
+the segment holds, re-checking every cycle, for up to `straight_block_wait` (default 20 s, in total per
+segment; 0 = fail at once, max 60 s) until the sweep has been clear for `straight_clear_hold` (1 s, 0.2-5 s)
+in a row; then it resumes what is left of the segment (a new goal for the remaining distance, same
+guard and endpoint check). Past the budget it fails with `path still blocked after N s: <obstacle point>`.
+Every other guard check (cancel request, lift state, scan freshness, drift, footprint lease) keeps running
+while it holds. An obstacle that the stop-short rule accepts (a leg just beyond the target) does not trigger
+the hold. The failed task is cancelled by the fleet adapter as with any other `pick_cart`/`place_cart` failure.
 The configurable ceilings are 0.05 m, 0.0523599 rad (3 degrees), and 0.06 m respectively;
 values above them are rejected. Before movement, the measured cart offset from the segment axis
 must satisfy `lateral_tolerance` (0.04 m) and `yaw_tolerance`. During movement, the
@@ -309,8 +338,8 @@ response has `success=false` and a reason. It does not move the robot or change 
 
 Offline checks do not establish stopping distance, lidar visibility through cart-leg shadows,
 cart slip, localization accuracy, or clearance over the whole corridor. A 360-degree scan
-does not guarantee unoccluded coverage. The 0.75 m lookahead is a conservative software
-default requiring measured braking/cancellation validation. Endpoint map clearance alone
+does not guarantee unoccluded coverage. The 0.75 m lookahead (shortened near the end point, see
+above) is a conservative software default requiring measured braking/cancellation validation. Endpoint map clearance alone
 does not guarantee the corridor is clear. Validate the tight-station maneuver in the isolated
 simulation before using these changes on hardware.
 
