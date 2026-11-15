@@ -25,7 +25,8 @@ El mundo, el modelo `lift_cart` y las estaciones viven en el paquete `indra` (`m
 
 - `lift_controller.py`: servicios `lift_up`/`lift_down` (`std_srvs/Trigger`, con rampa), tópico `lift_state` (`Bool`, transient local), `lift_cmd`.
   Lo lanza `bcr_bot_gz_spawn.launch.py`.
-- `cart_carry_adapter.py`: con el carro levantado filtra el scan (`scan_filtered`), cambia el footprint de los costmaps al del carro
+- `cart_carry_adapter.py` (desde 2026-11-15 también un **modo caja**, servicio `carry_box_mode` `SetBool`, apagado por defecto: para una caja sin carro mantiene la huella del robot y solo filtra lo que cae dentro
+  del robot; no se arma con la plataforma arriba y se limpia al bajar; lo usa `pick_box` del adapter): con el carro levantado filtra el scan (`scan_filtered`), cambia el footprint de los costmaps al del carro
   y concede un lease de 0.6 s de footprint del robot (`cart_straight_footprint`, `SetBool`) solo para tramos rectos.
 - `cart_handler.py`: action servers `pick_cart` y `place_cart` (`nav2_msgs/DockRobot`, con `use_dock_id: false`) y `drop_cart` (`UndockRobot`),
   más `~/reset_fault`. Mide el carro por sus 4 patas en el láser (`cart_legs.py`).
@@ -75,6 +76,8 @@ ros2 launch bcr_bot nav2_factory.launch.py
   Mantener allí los comandos, namespaces y configuración; `docs/doc.md` solo conserva un enlace de compatibilidad.
 - `config/` tiene varios mapas (`factory_map*.yaml`, `bcr_map*.yaml`) y `factory_map_2_backup.pgm`/`factory_map_aux.pgm`; el que usa Nav2 de fábrica por defecto es `factory_map_2.yaml`.
 - No hay `.claude/` ni `.agents/` con contenido útil (carpetas vacías).
+- El Nav2 de fábrica usa `config/navigate_to_pose_no_spin_recovery.xml` (desde 2026-11-15): el árbol de Nav2 **sin las recuperaciones `Spin` (90°) y `BackUp`**; ante un fallo limpia costmaps, espera y aborta, y decide el adapter. El
+  `<bcr_bot_config>` de `nav2_factory_params.yaml` lo reemplaza `bcr_bot_nav2.launch.py`. No volver a ponerlas sin pedirlo: giraban al robot en celdas donde no puede.
 - Con el carro levantado, cualquier movimiento con chequeo de colisión falla: RMF→Nav2 devolvió status 6 cuatro veces y un `BackUp` directo de 1,6 m dio ABORTED error 714 `COLLISION_AHEAD`.
   `nav2_msgs/BackUp` instalado no tiene `disable_collision_checks`: por eso los tramos staging↔centro los hace `cart_handler` en línea recta, no Nav2.
 - Medido el 2026-11-14 en simulación (3 robots, `recogida_almacen_materiales2`): AMCL con el robot quieto varía 2,4 cm en x y 3,5 cm en y (20 actualizaciones forzadas), pero entre dos lecturas separadas por una espera llegó a cambiar ~8 cm; el carro quedó a 0,5–3,4 cm de su punto en 5 colocaciones y a 9,9 cm en una (sin explicar).
