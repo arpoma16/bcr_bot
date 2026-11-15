@@ -69,10 +69,13 @@ bt_navigator:
     error_code_names:
       - compute_path_error_code
       - follow_path_error_code
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
+    # navigate_to_pose (what RMF uses) runs our copy of Nav2's tree WITHOUT the Spin (90 deg) and
+    # BackUp recoveries: a robot that fails to follow its path must not turn or reverse on its own,
+    # often in a cell where it cannot (config/navigate_to_pose_no_spin_recovery.xml).
+    # <bcr_bot_config> is replaced by bcr_bot_nav2.launch.py with share/bcr_bot/config.
+    default_nav_to_pose_bt_xml: "<bcr_bot_config>/navigate_to_pose_no_spin_recovery.xml"
+    # 'default_nav_through_poses_bt_xml' keeps the default (not used by RMF):
     # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
 
     # plugin_lib_names is used to add custom BT plugins to the executor (vector of strings).
     # Built-in plugins are added automatically

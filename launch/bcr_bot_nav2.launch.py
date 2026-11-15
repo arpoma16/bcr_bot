@@ -5,8 +5,9 @@ Everything runs inside the robot namespace: nodes /<ns>/..., actions /<ns>/navig
 /<ns>/amcl_pose, and TF read from /<ns>/tf (the spawn launch keeps the robot TF there and
 relays it to the global /tf). Several robots can run their own copy with different namespaces.
 
-The params file uses two placeholders (see config/nav2_factory_params.yaml):
-<robot_name> (TF frames, replaced here) and <robot_namespace> (topics, replaced by nav2_bringup).
+The params file uses three placeholders (see config/nav2_factory_params.yaml):
+<robot_name> (TF frames) and <bcr_bot_config> (share/bcr_bot/config, for the behavior tree XML),
+both replaced here, and <robot_namespace> (topics, replaced by nav2_bringup).
 """
 
 from os.path import join
@@ -40,7 +41,10 @@ def launch_setup(context, *args, **kwargs):
 
     params_file = ReplaceString(
         source_file=cfg("params_file"),
-        replacements={"<robot_name>": ns},
+        replacements={
+            "<robot_name>": ns,
+            "<bcr_bot_config>": join(get_package_share_directory("bcr_bot"), "config"),
+        },
     )
 
     actions = [

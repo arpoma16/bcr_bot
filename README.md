@@ -205,6 +205,18 @@ For the included MuJoCo warehouse map:
 ros2 launch bcr_bot nav2.launch.py map:="$(ros2 pkg prefix --share bcr_bot)/config/bcr_map_mujoco.yaml"
 ```
 
+**Failure recovery in the factory (since 2026-11-15).** `config/nav2_factory_params.yaml` sets
+`bt_navigator.default_nav_to_pose_bt_xml` to `config/navigate_to_pose_no_spin_recovery.xml`, a copy of Nav2's
+`navigate_to_pose_w_replanning_and_recovery.xml` **without the `Spin` (1.57 rad, 90 deg) and `BackUp` recoveries**: when the path
+cannot be followed the robot clears the costmaps, waits 5 s and, after the retries, aborts the goal, and
+`indra_fleet_adapter` decides (replan, then cancel the task). With the default tree every failure spun the robot 90 deg
+(8 spins per robot in one session), even a few centimetres from the goal and in cells where it cannot turn.
+`bcr_bot_nav2.launch.py` replaces the `<bcr_bot_config>` placeholder of the YAML with `share/bcr_bot/config`; a custom
+`params_file` that does not use it is unaffected. `default_nav_through_poses_bt_xml` keeps Nav2's default (RMF does not use it).
+Verified in simulation on 2026-11-15: with 56 `collision ahead` errors and 4 replans forced by an obstacle, 0 spin and 0 backup
+recoveries. The in-place turns of a normal route (about 90 deg at each graph corner, about 160 deg at the stagings) are not failures:
+RMF sends one waypoint at a time with its heading, the robot cannot reverse and `rotate_to_goal_heading` is on; they did not change.
+
 ### Lift platform and carts (this fork, Gz Sim)
 
 The black top block of the robot is a Kiva-style lift (`lift_joint`, prismatic, 0 to 0.10 m), driven by the
