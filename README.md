@@ -275,6 +275,15 @@ AMCL, the costmaps and the collision monitor), and switches the costmap
 footprint to the cart's. The cart model (deck underside 0.375 m, 1.12 x 0.92 m between legs) is
 `models/lift_cart` in the `indra` package; design notes, measurements and limits in `docs/LIFT_CARTS.md`.
 
+**Box mode** (since 2026-11-15) is for a load that is *not* a cart (a box on the plate, `pick_box` /
+`drop_box` of `indra_fleet_adapter`). The `carry_box_mode` SetBool service of `cart_carry_adapter.py` is called with
+`true` while the plate is down, before `lift_up`: no cart is measured, the costmap footprint stays the robot's and only
+the scan returns inside the robot plus `box_filter_margin` (0.05 m) are removed, not the wide cart box. Without it a
+`BackUp` out of a station with a box on the plate aborts like with a cart (the cart footprint 1.24 x 1.04 m). It is off
+by default (carts behave as before), it cannot be armed with the plate up (a real cart is never lifted in box mode),
+it cannot be switched off under a load and it clears itself when the plate goes down. Verified in simulation on
+2026-11-15 (2 robots, `pick_box` / `drop_box` through RMF); not verified: `pick_cart` / `place_cart` after the change.
+
 For guarded straight segments only, the adapter grants a renewable 0.6 s robot-footprint lease
 through the internal `cart_straight_footprint` SetBool service. It retains cart scan filtering;
 the handler independently checks the **raw** 360-degree scan in the 0.75 m strip immediately
