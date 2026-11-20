@@ -81,6 +81,16 @@
          (measured, 20 kg or not). Keep d_gain*step/plate_mass (2 kg) below ~1. -->
     <xacro:arg name="lift_d_gain" default="200" />
     <xacro:arg name="lift_i_max" default="400" />
+    <!-- Rate [Hz, simulation time] of the gz JointStatePublisher (see gz.xacro). Left unset it publishes
+         every physics step (250 Hz with the 4 ms step of the factory worlds), and each consumer
+         (robot_state_publisher, the lift controller, the bridge) pays for every message. 30 Hz is plenty
+         for the wheel TF and for following a 5 cm/s lift ramp (1.7 mm per message). 0 = every step. -->
+    <xacro:arg name="joint_state_rate" default="30" />
+    <!-- Rate [Hz, simulation time] of the lift-only state topic <ns>/lift/position (see gz.xacro). The lift
+         controller advances its ramp with it, so each message moves the setpoint by 5 cm/s / rate: with 10 Hz
+         that is 5 mm and the plate speed pulses (std 5.3 cm/s measured), with 30 Hz 1.7 mm (std 2.1 cm/s). It
+         costs nothing while idle: the controller only listens to it during a lift_up / lift_down. -->
+    <xacro:arg name="lift_state_rate" default="30" />
 
     <xacro:property name="odometry_source" value="$(arg odometry_source)"/>
     <!-- Namespace vacío (por defecto) = robot sin prefijo, como upstream.

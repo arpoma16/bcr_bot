@@ -24,6 +24,17 @@
         <plugin 
             filename="gz-sim-joint-state-publisher-system" 
             name="gz::sim::systems::JointStatePublisher">
+            <update_rate>$(arg joint_state_rate)</update_rate>
+        </plugin>
+
+        <!-- Lift joint only, on its own topic: lift_controller listens to this one while the plate moves,
+             instead of to the state of every joint. -->
+        <plugin
+            filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+            <joint_name>${prefix}lift_joint</joint_name>
+            <topic>${prefix}lift/position</topic>
+            <update_rate>$(arg lift_state_rate)</update_rate>
         </plugin>
 
         <!-- ........................... DIFFERENTIAL DRIVE PLUGIN ................................... -->
