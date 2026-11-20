@@ -83,14 +83,18 @@ def launch_setup(context, *args, **kwargs):
     # The handler guards raw scan + odom during leased straight segments and provides
     # ~/reset_fault (Trigger). Placement/straight tolerances default in cart_handler.py;
     # this launch passes only simulation time and the namespaced base frame.
-    actions.append(Node(
-        package="bcr_bot",
-        executable="cart_handler.py",
-        name="cart_handler",
-        namespace=ns,
-        output="screen",
-        parameters=[{"use_sim_time": _is_true(use_sim_time), "base_frame": f"{ns}/base_link"}],
-    ))
+    # TEMPORARY: off by default (enable_cart_handler:=True brings it back). With 5 robots it idles
+    # at ~220 % of a core and dragged the real time factor down; the cart tasks are out of scope
+    # for the delivery. Without it pick_cart / place_cart / drop_cart answer "not available".
+    if _is_true(cfg("enable_cart_handler")):
+        actions.append(Node(
+            package="bcr_bot",
+            executable="cart_handler.py",
+            name="cart_handler",
+            namespace=ns,
+            output="screen",
+            parameters=[{"use_sim_time": _is_true(use_sim_time), "base_frame": f"{ns}/base_link"}],
+        ))
 
     if _is_true(cfg("set_initial_pose")):
         actions.append(Node(
@@ -155,6 +159,9 @@ def generate_launch_description():
         DeclareLaunchArgument("orientation_yaw", default_value="0.0", description="Initial yaw in the map [rad]"),
         DeclareLaunchArgument("initial_pose_delay", default_value="10.0",
                               description="Seconds to wait after AMCL is up before sending the pose."),
+        DeclareLaunchArgument("enable_cart_handler", default_value="False",
+                              description="TEMPORARY off: start cart_handler (pick_cart / place_cart / "
+                                          "drop_cart). ~220 % of a core with 5 robots."),
         DeclareLaunchArgument("rviz", default_value="False", description="Start a namespaced RViz."),
         OpaqueFunction(function=launch_setup),
     ])

@@ -31,7 +31,9 @@ El mundo, el modelo `lift_cart` y las estaciones viven en el paquete `indra` (`m
 - `cart_handler.py`: action servers `pick_cart` y `place_cart` (`nav2_msgs/DockRobot`, con `use_dock_id: false`) y `drop_cart` (`UndockRobot`),
   más `~/reset_fault`. Mide el carro por sus 4 patas en el láser (`cart_legs.py`).
 - `cart_geometry.py` es geometría plana pura, **sin ROS**, para poder testearla offline.
-- Los dos últimos nodos los lanza `bcr_bot_nav2.launch.py`.
+- Los dos últimos nodos los lanza `bcr_bot_nav2.launch.py`. **TEMPORAL (2026-11-20):** `cart_handler` está apagado por defecto
+  (`enable_cart_handler:=True` lo devuelve): en reposo gastaba ~220 % de un núcleo con 5 robots y bajaba el RTF, y los carros no entran en la entrega del martes.
+  Sin él `pick_cart`/`place_cart`/`drop_cart` responden "not available". `cart_carry_adapter` sigue activo: da `scan_filtered` a Nav2 y el modo caja que usa `pick_box`.
 
 Los parámetros, límites y errores (`DOCK_NOT_VALID`, `FAILED_TO_STAGE`, ...) están documentados en el README (sección `Lift platform and carts`).
 No duplicarlos aquí: si cambia el comportamiento, se actualiza el README.
