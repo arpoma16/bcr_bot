@@ -24,7 +24,11 @@
     <xacro:property name="traction_wheel_width" value="0.05"/>
     <xacro:property name="traction_track_width" value="0.6"/>
 
-    <xacro:property name="two_d_lidar_update_rate" value="30"/>
+    <!-- Lidar rate [Hz, simulation time]. Every scan is deserialised and copied by Nav2, cart_adapter and
+         cart_handler, so it scales their memory traffic (see docs/LIFT_CARTS.md). cart_handler brakes on the
+         raw scan: lowering it delays the braking, so the default stays 30. -->
+    <xacro:arg name="two_d_lidar_update_rate" default="30" />
+    <xacro:property name="two_d_lidar_update_rate" value="$(arg two_d_lidar_update_rate)"/>
     <xacro:property name="two_d_lidar_sample_size" value="361"/>
     <xacro:property name="two_d_lidar_min_angle" value="0"/>
     <xacro:property name="two_d_lidar_max_angle" value="360"/>
@@ -91,6 +95,9 @@
          that is 5 mm and the plate speed pulses (std 5.3 cm/s measured), with 30 Hz 1.7 mm (std 2.1 cm/s). It
          costs nothing while idle: the controller only listens to it during a lift_up / lift_down. -->
     <xacro:arg name="lift_state_rate" default="30" />
+    <!-- Rate [Hz, simulation time] of the front camera (640x480). The camera is only watched by the
+         dashboard, and rendering it every 100 ms per robot costs real time factor. -->
+    <xacro:arg name="front_camera_update_rate" default="10.0" />
 
     <xacro:property name="odometry_source" value="$(arg odometry_source)"/>
     <!-- Namespace vacío (por defecto) = robot sin prefijo, como upstream.

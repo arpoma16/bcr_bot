@@ -274,7 +274,7 @@
     <xacro:if value="$(arg front_camera_enabled)">
         <gazebo reference="${prefix}front_camera">
             <sensor type="camera" name="front">
-                <update_rate>10.0</update_rate>
+                <update_rate>$(arg front_camera_update_rate)</update_rate>
                 <always_on>true</always_on>
                 <pose>0 0 0 0 0 0</pose>
 

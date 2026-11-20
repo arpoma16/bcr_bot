@@ -104,6 +104,8 @@ def launch_setup(context, *args, **kwargs):
                  " stereo_camera_enabled:=", cfg("stereo_camera_enabled"),
                  " front_camera_enabled:=", cfg("front_camera_enabled"),
                  " two_d_lidar_enabled:=", cfg("two_d_lidar_enabled"),
+                 " two_d_lidar_update_rate:=", cfg("two_d_lidar_update_rate"),
+                 " front_camera_update_rate:=", cfg("front_camera_update_rate"),
                  " odometry_source:=", cfg("odometry_source"),
                  " sim_gz:=true"]
     if ns:
@@ -215,6 +217,11 @@ def generate_launch_description():
                               description="Enable the front RGB camera (640x480)"),
         DeclareLaunchArgument("two_d_lidar_enabled", default_value="True",
                               description="Enable the 2D lidar"),
+        DeclareLaunchArgument("two_d_lidar_update_rate", default_value="30",
+                              description="2D lidar rate [Hz]. cart_handler brakes on the raw scan: "
+                                          "lowering it delays the braking."),
+        DeclareLaunchArgument("front_camera_update_rate", default_value="10.0",
+                              description="Front camera rate [Hz]"),
         DeclareLaunchArgument("position_x", default_value="0.0", description="Spawn x [m]"),
         DeclareLaunchArgument("position_y", default_value="0.0", description="Spawn y [m]"),
         DeclareLaunchArgument("orientation_yaw", default_value="0.0", description="Spawn yaw [rad]"),
