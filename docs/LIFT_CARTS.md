@@ -117,6 +117,19 @@ Las mediciones siguientes siguen vigentes (contrastadas con el código el 2026-1
   - Un damping alto en el joint (20000) más la fricción del contacto se comían la fuerza: solo levantaba ~6 kg.
   - Solución: damping 500 (`lift_damping`) y un `d_gain` alto en el PID.
   - El PID es rígido (el recorrido entero en ~0,25 s); la rampa la pone `lift_controller`.
+  - `use_velocity_commands` (limitador de velocidad de gz) **no mueve el joint con DART** (2026-11-20, mundo mínimo con los valores
+    de este joint: 2 y 22 kg, `damping` 500 y 0, `cmd_max` 0,05 y 0,5: la posición se queda en 0, mientras que el PID por fuerza
+    llega a 0,1 m). Por eso la rampa sigue en el nodo y no se puede delegar en gz sin un plugin propio.
+- **Coste del nodo (2026-11-20):** con `joint_states` a 250 Hz (un mensaje por paso de física) y `use_sim_time` (suscripción a `/clock`,
+  250 Hz) el nodo gastaba 67-89 % de un núcleo **en reposo**, por robot: el ejecutor multihilo de rclpy se come un núcleo con cualquier flujo
+  continuo, aunque la callback sea trivial. Ahora: un `JointStatePublisher` **solo del lift** en `<ns>/lift/position`
+  (`lift_state_rate` en `bcr_bot.xacro`, 30 Hz; el de todos los joints baja a 30 Hz con `joint_state_rate`, `<update_rate>` del plugin),
+  el nodo se suscribe a `lift/position` solo al arrancar y durante un movimiento (parámetro `state_topic`), y va sin `use_sim_time`: la
+  rampa sigue el tiempo de simulación por el sello de cabecera de esos mensajes. En reposo, 0 % medido (1 robot, sim aislada con
+  `/clock` a 250 Hz).
+  La frecuencia del tópico solo afecta a la suavidad: cada mensaje mueve la consigna 5 cm/s ÷ frecuencia. Velocidad medida de la
+  plataforma durante la rampa: desviación típica 5,3 cm/s con 10 Hz (escalones de 5 mm) y 2,1-2,3 cm/s con 30 Hz.
+  Sin validar con carga real (carro de 20 kg, RMF) ni con varios robots.
 - **`d_gain` y el paso de física (2026-11-12):** con `d_gain=3000` la plataforma funcionaba con un paso de 1 ms, pero con el
   paso de 4 ms de `factory*.sdf` se quedaba ~1,3 cm por debajo de la consigna (`lift_up` fallaba por timeout con tolerancia de 3 mm)
   y temblaba (banda de 2,8 mm). Es independiente del mundo y de la carga. Un plato de 2 kg con paso de 4 ms necesita

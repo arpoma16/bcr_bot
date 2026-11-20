@@ -224,7 +224,7 @@ gz `JointPositionController` (force PID). Everything below lives inside the robo
 
 | Interface | Type | Started by |
 |---|---|---|
-| `lift_up`, `lift_down` | `std_srvs/Trigger` (ramped, waits for `joint_states`) | `bcr_bot_gz_spawn.launch.py` (`scripts/lift_controller.py`) |
+| `lift_up`, `lift_down` | `std_srvs/Trigger` (ramped, waits for the lift position on `lift/position`; listens to it only while moving and follows the simulation time through its header stamps, so the idle node uses no CPU) | `bcr_bot_gz_spawn.launch.py` (`scripts/lift_controller.py`) |
 | `lift_state` | `std_msgs/Bool`, transient local, true = up | same |
 | `lift_cmd` | `std_msgs/Float64`, target height without ramp | bridge |
 | `pick_cart` | `nav2_msgs/action/DockRobot`: `dock_pose` = cart centre in `map`, `use_dock_id: false` | `bcr_bot_nav2.launch.py` (`scripts/cart_handler.py`) |

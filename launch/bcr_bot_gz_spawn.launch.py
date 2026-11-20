@@ -46,6 +46,7 @@ def _bridge_entries(ns, name):
     entries = [
         ("cmd_vel", "geometry_msgs/msg/Twist@gz.msgs.Twist", None),
         ("lift_cmd", "std_msgs/msg/Float64]gz.msgs.Double", None),
+        ("lift/position", "sensor_msgs/msg/JointState[gz.msgs.Model", None),
         ("odometry", "nav_msgs/msg/Odometry[gz.msgs.Odometry", ros + "odom"),
         ("tf", "tf2_msgs/msg/TFMessage[gz.msgs.Pose_V", f"/{ns}/tf" if ns else "/tf"),
         ("scan", "sensor_msgs/msg/LaserScan[gz.msgs.LaserScan", None),
@@ -155,7 +156,9 @@ def launch_setup(context, *args, **kwargs):
         name="lift_controller",
         namespace=name,
         output="screen",
-        parameters=[{"use_sim_time": True,
+        # No use_sim_time on purpose: it would subscribe to /clock (250 Hz) and burn most of a core
+        # per robot while idle. The node follows the simulation through the joint_states stamps.
+        parameters=[{"use_sim_time": False,
                      "joint_name": f"{ns}/lift_joint" if ns else "lift_joint"}],
     )
 
