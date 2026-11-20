@@ -227,6 +227,12 @@ gz `JointPositionController` (force PID). Everything below lives inside the robo
 | `lift_up`, `lift_down` | `std_srvs/Trigger` (ramped, waits for the lift position on `lift/position`; listens to it only while moving and follows the simulation time through its header stamps, so the idle node uses no CPU) | `bcr_bot_gz_spawn.launch.py` (`scripts/lift_controller.py`) |
 | `lift_state` | `std_msgs/Bool`, transient local, true = up | same |
 | `lift_cmd` | `std_msgs/Float64`, target height without ramp | bridge |
+
+**Temporary (2026-11-20):** `cart_handler` (the `pick_cart` / `place_cart` / `drop_cart` servers below) does **not** start unless
+`bcr_bot_nav2.launch.py` gets `enable_cart_handler:=True`: with 5 robots it idled at ~220 % of a core and lowered the real time factor,
+and carts are out of scope for the delivery. Without it those actions answer "not available". `cart_carry_adapter` is still started.
+The lidar and front camera rates are launch arguments of `bcr_bot_gz_spawn.launch.py` (`two_d_lidar_update_rate`, default 30 Hz;
+`front_camera_update_rate`, default 10 Hz); the measurements are in `indra/docs/world/PERFORMANCE.md`.
 | `pick_cart` | `nav2_msgs/action/DockRobot`: `dock_pose` = cart centre in `map`, `use_dock_id: false` | `bcr_bot_nav2.launch.py` (`scripts/cart_handler.py`) |
 | `place_cart` | `nav2_msgs/action/DockRobot`: destination centre/orientation in `dock_pose`, `use_dock_id: false` | same |
 | `drop_cart` | `nav2_msgs/action/UndockRobot` | same |
