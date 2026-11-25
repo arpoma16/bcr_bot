@@ -62,7 +62,7 @@ ros2 launch bcr_bot nav2_factory.launch.py
 
 - Los scripts se instalan con `install(PROGRAMS ...)` en `CMakeLists.txt`. **Un script nuevo hay que añadirlo ahí**, o el launch no lo encuentra.
 - `launch/__pycache__` y `scripts/__pycache__` son ruido (no commitear).
-- Build y ejecución en el contenedor `indra_dev_container`: ver `../CLAUDE.md` (no compilar sin que el usuario lo pida).
+- Build y ejecución en el contenedor `lince_dev_container`: ver `../CLAUDE.md` (no compilar sin que el usuario lo pida).
 
 ## Convenciones
 
